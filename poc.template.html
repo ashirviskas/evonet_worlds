@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>EvoSim PoC</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #111; color: #ddd; font-family: monospace; display: flex; height: 100vh; overflow: hidden; }
+#lineage-panel { width: 320px; min-width: 120px; background: #141414; border-right: 1px solid #333; position: relative; flex-shrink: 0; user-select: none; }
+#lineage-canvas { display: block; width: 100%; height: 100%; cursor: grab; }
+#lineage-header { position: absolute; top: 4px; left: 6px; color: #8cf; font-size: 11px; z-index: 2; pointer-events: none; text-shadow: 0 0 3px #000; }
+#lineage-filter { position: absolute; top: 20px; left: 6px; z-index: 2; color: #8cf; font-size: 10px; display: flex; align-items: center; gap: 4px; background: rgba(20,20,20,0.7); padding: 2px 6px; border-radius: 3px; }
+#lineage-filter input[type=range] { width: 90px; }
+#lineage-popup { position: fixed; display: none; background: #1a1a1a; border: 1px solid #555; border-radius: 4px; font-size: 10px; line-height: 1.4; color: #ddd; z-index: 150; box-shadow: 0 4px 16px rgba(0,0,0,0.7); min-width: 240px; min-height: 160px; resize: both; overflow: hidden; }
+#lineage-popup b { color: #8cf; }
+#lineage-edge-tooltip { position: fixed; display: none; background: #222; color: #eee; border: 1px solid #555; border-radius: 4px; padding: 4px 8px; font-size: 10px; font-family: monospace; pointer-events: none; z-index: 120; max-width: 280px; line-height: 1.4; box-shadow: 0 2px 8px rgba(0,0,0,0.5); }
+.resizer { flex: 0 0 4px; cursor: col-resize; background: #333; transition: background 0.1s; }
+.resizer:hover, .resizer.active { background: #66c; }
+#canvas-container { flex: 1; position: relative; }
+canvas { display: block; width: 100%; height: 100%; }
+#panel { width: 340px; background: #1a1a1a; border-left: 1px solid #333; padding: 12px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; font-size: 11px; }
+#controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+#controls button { background: #333; color: #ddd; border: 1px solid #555; padding: 4px 10px; cursor: pointer; font-family: monospace; }
+#controls button:hover { background: #444; }
+#cell-actions button { background: #333; color: #ddd; border: 1px solid #555; padding: 4px 10px; cursor: pointer; font-family: monospace; font-size: 11px; }
+#cell-actions button:hover { background: #444; }
+#controls button.active { background: #2a6; color: #fff; }
+/* Default style for all panel buttons not matched above */
+#panel button { background: #2a2a2a; color: #ddd; border: 1px solid #444; cursor: pointer; font-family: monospace; padding: 3px 8px; border-radius: 3px; }
+#panel button:hover { background: #3a3a3a; border-color: #666; }
+#panel button:active { background: #1a1a1a; }
+/* Inspector inline buttons (inside .inspect-body) */
+.inspect-body button { background: #2a2a2a; color: #bbb; border: 1px solid #444; cursor: pointer; font-family: monospace; border-radius: 3px; }
+.inspect-body button:hover { background: #3a3a3a; color: #eee; border-color: #666; }
+.inspect-popup { position: fixed; background: #1a1a1a; border: 1px solid #555; border-radius: 4px; font-size: 11px; line-height: 1.4; color: #ddd; z-index: 150; box-shadow: 0 4px 16px rgba(0,0,0,0.7); min-width: 280px; min-height: 200px; resize: both; overflow: hidden; flex-direction: column; }
+.inspect-title-bar { cursor: move; padding: 4px 8px; background: #223; display: flex; align-items: center; gap: 8px; flex-shrink: 0; user-select: none; }
+.inspect-close { background: #333; color: #ddd; border: 1px solid #555; padding: 1px 6px; cursor: pointer; font-family: monospace; font-size: 10px; border-radius: 3px; }
+.inspect-close:hover { background: #444; }
+/* Modal buttons */
+#editor-modal button, #library-modal button { font-family: monospace; cursor: pointer; border-radius: 3px; }
+#speed-container { display: flex; align-items: center; gap: 6px; }
+#speed-container input { width: 80px; }
+#stats { font-size: 12px; line-height: 1.6; }
+.inspect-title { font-size: 13px; font-weight: bold; color: #aef; }
+.inspect-body { overflow: auto; flex: 1; min-height: 0; padding: 8px; overflow-x: hidden; }
+.slot-section { margin: 4px 0; }
+.slot-header { font-weight: bold; margin: 2px 0; }
+.subslot-row { display: flex; align-items: center; gap: 2px; min-height: 16px; margin: 1px 0; }
+.subslot-label { width: 18px; color: #666; font-size: 9px; flex-shrink: 0; }
+.subslot-bar { height: 14px; border-radius: 2px; display: flex; align-items: center; justify-content: center; font-size: 9px; min-width: 14px; }
+.slot-closed { opacity: 0.3; }
+.slot-empty { color: #555; font-style: italic; font-size: 10px; }
+.protein-badge { display: inline-block; padding: 0 4px; border-radius: 3px; font-size: 10px; cursor: default; line-height: 16px; }
+.dna-byte { cursor: default; padding: 0 1px; border-radius: 2px; }
+#protein-legend { position: fixed; bottom: 0; left: 320px; right: 340px; max-height: 40vh; background: rgba(20,20,20,0.95); border-top: 1px solid #333; display: flex; flex-wrap: wrap; align-items: center; padding: 2px 8px; gap: 2px; overflow-y: auto; z-index: 10; }
+.legend-swatch { width: 18px; height: 18px; border-radius: 3px; display: flex; align-items: center; justify-content: center; font-size: 8px; cursor: default; flex-shrink: 0; border: 1px solid rgba(255,255,255,0.15); }
+#milestones { position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.6); padding: 10px 14px; border-radius: 6px; font-size: 11px; line-height: 1.6; z-index: 5; pointer-events: none; min-width: 260px; }
+.ms-check { color: #5f5; }
+.ms-uncheck { color: #555; }
+.ms-count { color: #aaa; font-size: 10px; }
+#tooltip { position: fixed; z-index: 250; background: #222; color: #eee; border: 1px solid #555; border-radius: 4px; padding: 6px 10px; font-size: 12px; font-family: monospace; pointer-events: none; max-width: 280px; line-height: 1.4; white-space: pre-wrap; display: none; box-shadow: 0 2px 8px rgba(0,0,0,0.5); }
+#tooltip .tip-title { color: #8cf; font-weight: bold; }
+#tooltip .tip-desc { color: #bbb; }
+</style>
+</head>
+<body>
+<div id="lineage-panel">
+  <canvas id="lineage-canvas"></canvas>
+  <div id="lineage-header">DNA lineage</div>
+  <div id="lineage-filter">
+    <label for="lineage-min-copies">min copies:</label>
+    <input type="range" id="lineage-min-copies" min="1" max="15" value="1">
+    <span id="lineage-min-copies-val">1</span>
+  </div>
+</div>
+<div class="resizer" id="resizer-left" data-target="lineage-panel" data-dir="right"></div>
+<div id="canvas-container">
+  <canvas id="world"></canvas>
+  <div id="milestones"></div>
+</div>
+<div class="resizer" id="resizer-right" data-target="panel" data-dir="left"></div>
+<div id="panel">
+  <div id="controls">
+    <button id="btn-play" class="active">Play</button>
+    <button id="btn-pause">Pause</button>
+    <button id="btn-step">Step</button>
+    <button id="btn-restart">Restart</button>
+    <button id="btn-save-world">Save World</button>
+    <button id="btn-load-world">Load World</button>
+    <input type="file" id="file-load-world" accept=".json" style="display:none">
+    <div id="speed-container">
+      <label>Speed:</label>
+      <input type="range" id="speed" min="1" max="350" value="10">
+      <span id="speed-val">10</span>
+    </div>
+    <div style="display:flex; align-items:center; gap:4px; font-size:11px;">
+      <label>Seed:</label>
+      <input type="number" id="seed-input" value="42" style="width:60px; background:#222; color:#ddd; border:1px solid #555; font-family:monospace; padding:2px 4px;">
+    </div>
+    <div style="display:flex; align-items:center; gap:4px; font-size:11px;">
+      <label>Cells:</label>
+      <input type="range" id="initial-cells" min="1" max="1000" value="40" style="width:80px;">
+      <span id="initial-cells-val">40</span>
+    </div>
+    <label style="display:flex; align-items:center; gap:4px; font-size:11px;">
+      <input type="checkbox" id="render-toggle" checked> Render
+    </label>
+  </div>
+  <div id="stats"></div>
+  <div id="cell-actions" style="display:flex; gap:6px; flex-wrap:wrap;">
+    <button id="btn-copy-genome">Copy Genome</button>
+    <button id="btn-divide">Force Divide</button>
+    <button id="btn-kill">Kill Cell</button>
+    <button id="btn-kill-highlighted" title="Kill all live cells whose chromosomes are in the lineage highlight set">Kill Highlighted</button>
+  </div>
+  <div style="display:flex; gap:6px; flex-wrap:wrap; border-top:1px solid #333; padding-top:6px;">
+    <button id="btn-new-chrom" style="font-size:10px;">New Chrom</button>
+    <button id="btn-spawn-from-clip" style="font-size:10px;">Organism from clipboard</button>
+    <button id="btn-free-from-clip" style="font-size:10px;">Free chrom from clipboard</button>
+    <button id="btn-library" style="font-size:10px;">Library</button>
+  </div>
+  <div style="font-size:11px; display:flex; flex-direction:column; gap:4px; border-top:1px solid #333; padding-top:8px;">
+    <b>Settings presets</b>
+    <div style="display:flex; gap:4px; align-items:center;">
+      <select id="preset-select" style="flex:1; min-width:0; background:#222; color:#ddd; border:1px solid #555; font-family:monospace; padding:2px 4px; font-size:11px;"></select>
+      <button id="preset-load" style="font-size:10px;">Load</button>
+      <button id="preset-save" style="font-size:10px;">Save</button>
+      <button id="preset-delete" title="Delete selected" style="font-size:10px;">×</button>
+    </div>
+    <div style="display:flex; gap:4px;">
+      <button id="preset-copy-json" style="font-size:10px;">Copy JSON</button>
+      <button id="preset-paste-json" style="font-size:10px;">Paste JSON</button>
+    </div>
+  </div>
+  <div id="mutation-container" style="display:flex; align-items:center; gap:6px; font-size:12px;">
+    <label>Mutation:</label>
+    <input type="range" id="mutation-rate" min="0" max="1000" value="250" style="width:80px;">
+    <span id="mutation-val">0.00010</span>
+  </div>
+  <div id="degradation-controls" style="font-size:11px; display:flex; flex-direction:column; gap:4px; border-top:1px solid #333; padding-top:8px;">
+    <b>DNA Degradation (aging)</b>
+    <div style="display:flex; align-items:center; gap:4px;">
+      <label>Start age:</label>
+      <input type="range" id="deg-start-age" min="10000" max="1000000" step="10000" value="10000" style="width:70px;">
+      <span id="deg-start-age-val">50k</span>
+    </div>
+    <div style="display:flex; align-items:center; gap:4px;">
+      <label>Start rate:</label>
+      <input type="range" id="deg-start-rate" min="1" max="100" value="1" style="width:70px;">
+      <span id="deg-start-rate-val">0.000001</span>
+    </div>
+    <div style="display:flex; align-items:center; gap:4px;">
+      <label>Increase/era:</label>
+      <input type="range" id="deg-increase" min="1" max="100" value="10" style="width:70px;">
+      <span id="deg-increase-val">10%</span>
+    </div>
+    <div style="display:flex; align-items:center; gap:4px;">
+      <label>Max rate:</label>
+      <input type="range" id="deg-max" min="1" max="100" value="10" style="width:70px;">
+      <span id="deg-max-val">0.01</span>
+    </div>
+  </div>
+  <div style="font-size:11px; display:flex; flex-direction:column; gap:4px; border-top:1px solid #333; padding-top:8px;">
+    <b>Light source</b>
+    <div style="display:flex; align-items:center; gap:6px;">
+      <label><input type="checkbox" id="light-moving" checked> orbit</label>
+      <label>Speed:</label>
+      <input type="range" id="light-speed" min="0" max="200" value="20" style="width:80px;">
+      <span id="light-speed-val">0.00002</span>
+    </div>
+  </div>
+  <div style="font-size:11px; display:flex; flex-direction:column; gap:4px; border-top:1px solid #333; padding-top:8px;">
+    <b>Energy economy</b>
+    <div style="display:flex; align-items:center; gap:4px;">
+      <label>Energy cap:</label>
+      <input type="range" id="energy-cap" min="50" max="1000" step="10" value="200" style="width:70px;">
+      <span id="energy-cap-val">200</span>
+    </div>
+    <div style="display:flex; align-items:center; gap:4px;">
+      <label>Metab cost:</label>
+      <input type="range" id="metab-cost" min="0" max="1000" value="715" style="width:70px;">
+      <span id="metab-cost-val">0.020</span>
+    </div>
+  </div>
+  <div style="font-size:11px; display:flex; flex-direction:column; gap:4px; border-top:1px solid #333; padding-top:8px;">
+    <b>Membrane</b>
+    <div style="display:flex; align-items:center; gap:4px;">
+      <label>Decay/tick:</label>
+      <input type="range" id="memb-decay" min="0" max="1000" value="566" style="width:70px;">
+      <span id="memb-decay-val">0.020</span>
+    </div>
+  </div>
+  <div style="font-size:11px; display:flex; flex-direction:column; gap:4px; border-top:1px solid #333; padding-top:8px;">
+    <b>Proteins</b>
+    <div style="display:flex; align-items:center; gap:4px;">
+      <label>Decay (cell):</label>
+      <input type="range" id="prot-decay-cell" min="0" max="1000" value="333" style="width:70px;">
+      <span id="prot-decay-cell-val">0.00010</span>
+    </div>
+    <div style="display:flex; align-items:center; gap:4px;">
+      <label>Decay (free):</label>
+      <input type="range" id="prot-decay-free" min="0" max="1000" value="434" style="width:70px;">
+      <span id="prot-decay-free-val">0.00020</span>
+    </div>
+    <div style="display:flex; align-items:center; gap:4px;">
+      <label>Make cost:</label>
+      <input type="range" id="prot-make-cost" min="0" max="1000" value="500" style="width:70px;">
+      <span id="prot-make-cost-val">1.00</span>
+    </div>
+  </div>
+  <div style="font-size:11px; display:flex; flex-direction:column; gap:4px; border-top:1px solid #333; padding-top:8px;">
+    <b>Replication &amp; transport</b>
+    <div style="display:flex; align-items:center; gap:4px;">
+      <label>Memb div thresh:</label>
+      <input type="range" id="t2-memb-thresh" min="5" max="100" value="30" style="width:70px;">
+      <span id="t2-memb-thresh-val">30</span>
+    </div>
+    <div style="display:flex; align-items:center; gap:4px;">
+      <label>Replicase timeout:</label>
+      <input type="range" id="t2-rep-timeout" min="0" max="1000" step="1" value="566" style="width:70px;">
+      <span id="t2-rep-timeout-val">100k</span>
+    </div>
+    <div style="display:flex; align-items:center; gap:4px;">
+      <label>Rep error rate:</label>
+      <input type="range" id="t2-rep-error" min="0" max="1000" value="500" style="width:70px;">
+      <span id="t2-rep-error-val">0.00100</span>
+    </div>
+    <div style="display:flex; align-items:center; gap:4px;">
+      <label><input type="checkbox" id="t2-rep-energy-on" checked> Energy advance:</label>
+      <input type="range" id="t2-rep-energy-chance" min="0" max="1000" value="500" style="width:70px;">
+      <span id="t2-rep-energy-chance-val">0.00010</span>
+    </div>
+    <div style="display:flex; align-items:center; gap:4px;">
+      <label>Expel rate:</label>
+      <input type="range" id="t2-expel" min="0" max="100" value="20" style="width:70px;">
+      <span id="t2-expel-val">0.02</span>
+    </div>
+    <div style="display:flex; align-items:center; gap:4px;">
+      <label>Intake rate:</label>
+      <input type="range" id="t2-intake" min="0" max="100" value="20" style="width:70px;">
+      <span id="t2-intake-val">0.02</span>
+    </div>
+    <div style="display:flex; align-items:center; gap:4px;">
+      <label>Chrom degrade:</label>
+      <input type="range" id="t2-chrom-deg" min="10" max="1000" step="10" value="200" style="width:70px;">
+      <span id="t2-chrom-deg-val">200</span>
+    </div>
+    <div style="display:flex; align-items:center; gap:4px;">
+      <label><input type="checkbox" id="t2-chrom-spawn-on" checked> Chrom spawn:</label>
+      <input type="range" id="t2-chrom-spawn" min="50" max="5000" step="50" value="500" style="width:70px;">
+      <span id="t2-chrom-spawn-val">500</span>
+    </div>
+    <div style="display:flex; align-items:center; gap:4px;">
+      <label>Legacy div:</label>
+      <input type="checkbox" id="t2-legacy-div">
+    </div>
+  </div>
+
+</div>
+<div id="protein-legend"></div>
+<div id="tooltip"></div>
+<div id="lineage-popup"></div>
+<div id="lineage-edge-tooltip"></div>
+<div id="inspect-popups"></div>
+
+<!-- Chromosome Editor Modal -->
+<div id="editor-modal" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.8); z-index:200; align-items:center; justify-content:center;">
+  <div style="background:#1a1a1a; border:1px solid #555; border-radius:6px; padding:16px; max-width:700px; width:90%; max-height:85vh; overflow-y:auto; color:#ddd; font-family:monospace; font-size:12px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+      <div id="editor-title" style="font-weight:bold; color:#8cf;">Chromosome Editor</div>
+      <button id="editor-close" style="background:#333; color:#ddd; border:1px solid #555; padding:2px 8px; cursor:pointer;">✕</button>
+    </div>
+    <div style="margin-bottom:4px; color:#888; font-size:10px;">Hex bytes (space-separated, e.g. "1f 23 a0 05"):</div>
+    <textarea id="editor-hex" style="width:100%; height:120px; background:#111; color:#ddd; border:1px solid #555; padding:6px; font-family:monospace; font-size:11px;"></textarea>
+    <div style="margin-top:8px; color:#888; font-size:10px;">Decoded preview:</div>
+    <pre id="editor-decoded" style="background:#0a0a0a; border:1px solid #2a2a2a; padding:6px; margin:4px 0; max-height:220px; overflow-y:auto; font-size:10px; line-height:1.3;"></pre>
+    <div id="editor-error" style="color:#f55; min-height:14px; font-size:10px;"></div>
+    <div style="display:flex; gap:6px; margin-top:8px; flex-wrap:wrap;">
+      <button id="editor-save" style="background:#2a6; color:#fff; border:0; padding:6px 12px; cursor:pointer;">Save</button>
+      <button id="editor-save-to-lib" style="background:#28a; color:#fff; border:0; padding:6px 12px; cursor:pointer;">Save to library</button>
+      <button id="editor-copy" style="background:#444; color:#ddd; border:0; padding:6px 12px; cursor:pointer;">Copy hex</button>
+      <button id="editor-random" style="background:#444; color:#ddd; border:0; padding:6px 12px; cursor:pointer;">Randomize</button>
+    </div>
+  </div>
+</div>
+
+<!-- Library Modal -->
+<div id="library-modal" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.8); z-index:200; align-items:center; justify-content:center;">
+  <div style="background:#1a1a1a; border:1px solid #555; border-radius:6px; padding:16px; max-width:600px; width:90%; max-height:85vh; overflow-y:auto; color:#ddd; font-family:monospace; font-size:12px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+      <div style="font-weight:bold; color:#8cf;">Chromosome Library (seed <span id="library-seed"></span>)</div>
+      <button id="library-close" style="background:#333; color:#ddd; border:1px solid #555; padding:2px 8px; cursor:pointer;">✕</button>
+    </div>
+    <div id="library-list" style="display:flex; flex-direction:column; gap:4px; margin:8px 0;"></div>
+    <div style="border-top:1px solid #333; padding-top:8px; display:flex; gap:6px; flex-wrap:wrap;">
+      <button id="library-clear" style="background:#a33; color:#fff; border:0; padding:4px 10px; cursor:pointer;">Clear all (this seed)</button>
+      <button id="library-export" style="background:#444; color:#ddd; border:0; padding:4px 10px; cursor:pointer;">Export JSON</button>
+    </div>
+  </div>
+</div>
+
+<script>
+<!-- JS_BUNDLE -->
+</script>
+</body>
+</html>

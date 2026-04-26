@@ -1,0 +1,61 @@
+evo_net headless benchmark
+  cells=2000  warmup=1000  ticks=2000  seed=42  seed-genome=no
+  warmup: 1000 ticks in 4878.3 ms (205 t/s), pop=2000
+  timed: 100/2000 ticks  pop=2000     timed: 200/2000 ticks  pop=2000     timed: 300/2000 ticks  pop=2000     timed: 400/2000 ticks  pop=2000     timed: 500/2000 ticks  pop=2000     timed: 600/2000 ticks  pop=2000     timed: 700/2000 ticks  pop=2000     timed: 800/2000 ticks  pop=2000     timed: 900/2000 ticks  pop=2000     timed: 1000/2000 ticks  pop=2000     timed: 1100/2000 ticks  pop=2000     timed: 1200/2000 ticks  pop=2000     timed: 1300/2000 ticks  pop=2000     timed: 1400/2000 ticks  pop=2000     timed: 1500/2000 ticks  pop=2000     timed: 1600/2000 ticks  pop=2000     timed: 1700/2000 ticks  pop=2000     timed: 1800/2000 ticks  pop=2000     timed: 1900/2000 ticks  pop=2000     timed: 2000/2000 ticks  pop=2000   
+
+=== RESULT ===
+ticks:       2000
+wall:        7803.1 ms
+throughput:  256.3 ticks/sec
+ms/tick:     3.9016 ms
+final pop:   2000
+final tick:  3000
+peak pop:    2000
+lineage:     total=2012 alive=1994 ghost=6 dead=12 copies=2000 merges=0
+
+=== PHASE BREAKDOWN (% of total timed ticks, sorted by time) ===
+  phase                              ms       %        calls    us/call
+  collisionPhysics                999.0    22.0         2000     499.52
+  photonTick                      698.2    15.4         2000     349.08
+  decayProteins                   443.0     9.8      4000000       0.11
+  migrateProteins                 407.3     9.0      2496238       0.16
+  replicationStarterTick          342.9     7.6      2496238       0.14
+  motorTick                       282.6     6.2      4000000       0.07
+  ribosomeStep                    271.4     6.0      2496238       0.11
+  sensorTick                      270.3     6.0      4000000       0.07
+  pumpTick                        209.7     4.6      2496238       0.08
+  membraneDivisionCheck           148.8     3.3      2496238       0.06
+  chromEjectTick                  145.4     3.2      2496238       0.06
+  chromaseInternalTick            137.2     3.0      2496238       0.05
+  degradeDNA                      126.8     2.8      2496238       0.05
+  rebuildGrid                      30.0     0.7         2000      14.99
+  freeProteinTick                   5.9     0.1         2000       2.94
+  rebuildFreeProteinGrid            4.8     0.1         2000       2.42
+  replicaseTick                     4.7     0.1         2000       2.35
+  freeChromosomeTick                2.8     0.1         2000       1.39
+  chromAbsorbAll                    2.7     0.1         2000       1.35
+  lineagePrune                      1.6     0.0           10     164.53
+  chromaseExternalTick              0.9     0.0         2000       0.44
+  (wrapped-phase total = 4536.1 ms / wall 7803.1 ms — gap is uninstrumented work in tick(); [bracketed] rows are sub-instrumented blocks inside tick(), overlapping wrapped phases)
+
+=== POPULATION CURVE ===
+  tick=    1100  pop=2000
+  tick=    1200  pop=2000
+  tick=    1300  pop=2000
+  tick=    1400  pop=2000
+  tick=    1500  pop=2000
+  tick=    1600  pop=2000
+  tick=    1700  pop=2000
+  tick=    1800  pop=2000
+  tick=    1900  pop=2000
+  tick=    2000  pop=2000
+  tick=    2100  pop=2000
+  tick=    2200  pop=2000
+  tick=    2300  pop=2000
+  tick=    2400  pop=2000
+  tick=    2500  pop=2000
+  tick=    2600  pop=2000
+  tick=    2700  pop=2000
+  tick=    2800  pop=2000
+  tick=    2900  pop=2000
+  tick=    3000  pop=2000
