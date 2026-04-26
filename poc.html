@@ -496,19 +496,19 @@ const PROTEIN_INFO = [];
     { name: 'Base Membrane', desc: 'Arms division once count ≥ membraneDivisionThreshold; threshold-worth is consumed at division to form the daughter membrane, the rest splits with cytoplasm.', cat: 'structure' },
     { name: 'Chromosome Ejector', desc: 'Pushes a random chromosome out of cell into medium', cat: 'transport' },
     { name: 'No-Chromies-Allowed', desc: 'Membrane protein: blocks chromosome absorption', cat: 'structure' },
-    { name: 'Replication Starter', desc: 'Randomly binds a chromosome in cytoplasm and initiates duplication; consumed on bind', cat: 'reproduction' },
+    { name: 'Basic Replication Starter', desc: 'Binds any chromosome and initiates a Basic-mode duplication: copies start-to-end byte-by-byte, ignoring replicase opcodes (start/end markers and jumps are treated as data). Consumed on bind. Errors still apply.', cat: 'reproduction' },
     { name: 'Chromase', desc: 'Digests a byte from a random chromosome for energy; quenched 1:1 by Inhibitor', cat: 'metabolism' },
     { name: 'Chromase Inhibitor', desc: 'Neutralises intracellular Chromase 1:1 (no effect outside cells yet)', cat: 'metabolism' },
-    { name: 'Replication Starter S0', desc: 'Like Replication Starter, but only binds chromosomes of shape 0', cat: 'reproduction' },
-    { name: 'Replication Starter S1', desc: 'Like Replication Starter, but only binds chromosomes of shape 1', cat: 'reproduction' },
-    { name: 'Replication Starter S2', desc: 'Like Replication Starter, but only binds chromosomes of shape 2', cat: 'reproduction' },
-    { name: 'Replication Starter S3', desc: 'Like Replication Starter, but only binds chromosomes of shape 3', cat: 'reproduction' },
-    { name: 'Replication Starter S4', desc: 'Like Replication Starter, but only binds chromosomes of shape 4', cat: 'reproduction' },
-    { name: 'Replication Starter S5', desc: 'Like Replication Starter, but only binds chromosomes of shape 5', cat: 'reproduction' },
-    { name: 'Replication Starter S6', desc: 'Like Replication Starter, but only binds chromosomes of shape 6', cat: 'reproduction' },
-    { name: 'Replication Starter S7', desc: 'Like Replication Starter, but only binds chromosomes of shape 7', cat: 'reproduction' },
-    { name: 'Replication Starter S8', desc: 'Like Replication Starter, but only binds chromosomes of shape 8', cat: 'reproduction' },
-    { name: 'Replication Starter S9', desc: 'Like Replication Starter, but only binds chromosomes of shape 9', cat: 'reproduction' },
+    { name: 'Advanced Replication Starter S0', desc: 'Advanced-mode duplication starter; only binds chromosomes of shape 0. Honours REPLICASE_START/END markers and JUMP opcodes.', cat: 'reproduction' },
+    { name: 'Advanced Replication Starter S1', desc: 'Advanced-mode duplication starter; only binds chromosomes of shape 1. Honours REPLICASE_START/END markers and JUMP opcodes.', cat: 'reproduction' },
+    { name: 'Advanced Replication Starter S2', desc: 'Advanced-mode duplication starter; only binds chromosomes of shape 2. Honours REPLICASE_START/END markers and JUMP opcodes.', cat: 'reproduction' },
+    { name: 'Advanced Replication Starter S3', desc: 'Advanced-mode duplication starter; only binds chromosomes of shape 3. Honours REPLICASE_START/END markers and JUMP opcodes.', cat: 'reproduction' },
+    { name: 'Advanced Replication Starter S4', desc: 'Advanced-mode duplication starter; only binds chromosomes of shape 4. Honours REPLICASE_START/END markers and JUMP opcodes.', cat: 'reproduction' },
+    { name: 'Advanced Replication Starter S5', desc: 'Advanced-mode duplication starter; only binds chromosomes of shape 5. Honours REPLICASE_START/END markers and JUMP opcodes.', cat: 'reproduction' },
+    { name: 'Advanced Replication Starter S6', desc: 'Advanced-mode duplication starter; only binds chromosomes of shape 6. Honours REPLICASE_START/END markers and JUMP opcodes.', cat: 'reproduction' },
+    { name: 'Advanced Replication Starter S7', desc: 'Advanced-mode duplication starter; only binds chromosomes of shape 7. Honours REPLICASE_START/END markers and JUMP opcodes.', cat: 'reproduction' },
+    { name: 'Advanced Replication Starter S8', desc: 'Advanced-mode duplication starter; only binds chromosomes of shape 8. Honours REPLICASE_START/END markers and JUMP opcodes.', cat: 'reproduction' },
+    { name: 'Advanced Replication Starter S9', desc: 'Advanced-mode duplication starter; only binds chromosomes of shape 9. Honours REPLICASE_START/END markers and JUMP opcodes.', cat: 'reproduction' },
     { name: 'Energy Storage [Empty]', desc: 'Discharged battery. When cell energy hits cap, one empty charges to Storing (type 36) and the cell pays energyStorageBonus.', cat: 'energy' },
     { name: 'Energy Storage [Storing]', desc: 'Charged battery, holds energyStorageBonus energy. When cell energy drops 30 below cap, one Storing discharges back to Empty (type 35) and the cell gains energyStorageBonus. Costs +energyStorageBonus to synthesise.', cat: 'energy' },
     { name: 'Division Starter Required', desc: 'While in cytoplasm, re-imposes the Divider Trigger (type 4) requirement on division. Not consumed — a persistent trait.', cat: 'reproduction' },
@@ -516,6 +516,7 @@ const PROTEIN_INFO = [];
     { name: 'Photon Sensor', desc: 'Fires when a photon is in the slot’s sector (special) or in range (membrane). On fire, walks +1 subslot ring: motor → direct impulse, empty/Move Signal → deposit, else → cytoplasm Move Signal.', cat: 'sensing' },
     { name: 'Cell Sensor', desc: 'Fires when another living cell is in the slot’s sector (special) or in range (membrane). +1 subslot coupling.', cat: 'sensing' },
     { name: 'Free-Protein Sensor', desc: 'Fires when a free protein is in the slot’s sector (special) or in range (membrane). +1 subslot coupling.', cat: 'sensing' },
+    { name: 'Advanced Replication Starter', desc: 'Binds any chromosome and initiates an Advanced-mode duplication: scans for REPLICASE_START, copies until REPLICASE_END, honours REPLICASE_JUMP_BYTE/CHROMOSOME. Consumed on bind. Errors apply.', cat: 'reproduction' },
   ];
   for (let i = 0; i < 64; i++) {
     const hue = (i * 360 / 64 + 15) % 360;
@@ -728,6 +729,7 @@ const world = {
   replicase_job_sourceRef: null,   // Array of Uint8Array — authoritative source pointer (survives genome reordering)
   // New scan/copy-phase fields (see 17_replicase.js).
   replicase_job_phase: null,       // Uint8Array — 0=SCANNING for replicase_start, 1=COPYING
+  replicase_job_mode: null,        // Uint8Array — 0=Basic (dumb start-to-end copy, ignores replicase opcodes), 1=Advanced (current scan/jump/end behaviour)
   replicase_job_holding: null,     // Uint8Array — 1 if the next emitted byte is an arg for a held replicase-jump opcode
   replicase_job_heldOpcode: null,  // Uint8Array — the held opcode byte when holding=1
   replicase_job_scanStart: null,   // Uint16Array — initial landing position (fallback if scan finds no replicase_start)
@@ -859,6 +861,7 @@ function initWorld() {
   world.replicase_job_sourceBytes = new Array(jp).fill(null);
   world.replicase_job_sourceRef = new Array(jp).fill(null);
   world.replicase_job_phase = new Uint8Array(jp);
+  world.replicase_job_mode = new Uint8Array(jp);
   world.replicase_job_holding = new Uint8Array(jp);
   world.replicase_job_heldOpcode = new Uint8Array(jp);
   world.replicase_job_scanStart = new Uint16Array(jp);
@@ -3538,7 +3541,9 @@ function replicaseFreeAllForCell(cellIdx) {
 // shapeFilter in [0,9] restricts source selection to chromosomes whose
 // chromosomeShape() == shapeFilter. If no chromosome matches, the starter
 // protein is NOT consumed — it only "binds" when a substrate exists.
-function replicationStarterTickFiltered(cellIdx, proteinType, shapeFilter) {
+// mode: 0 = Basic (skip scan, dumb start-to-end copy, ignores replicase opcodes)
+//       1 = Advanced (current behaviour: scan, jumps, end-marker termination)
+function replicationStarterTickFiltered(cellIdx, proteinType, shapeFilter, mode) {
   let starters = world.internalProteins[cellIdx * 64 + proteinType];
   if (starters <= 0) return;
   const genome = world.genomes[cellIdx];
@@ -3566,9 +3571,9 @@ function replicationStarterTickFiltered(cellIdx, proteinType, shapeFilter) {
       : world.rng.nextInt(genome.length);
     const srcChrom = genome[srcIdx];
     const srcLen = srcChrom.length;
-    // Pick a uniform random landing byte within the source; the replicase will
-    // scan forward (wrapping) from there, looking for a REPLICASE_START marker.
-    const landing = srcLen > 0 ? world.rng.nextInt(srcLen) : 0;
+    // Advanced: pick a uniform random landing byte and scan forward from there.
+    // Basic: skip scan entirely; copy from byte 0.
+    const landing = (mode === 1 && srcLen > 0) ? world.rng.nextInt(srcLen) : 0;
     world.replicase_job_alive[slot] = 1;
     world.replicase_job_cellIdx[slot] = cellIdx;
     world.replicase_job_sourceRef[slot] = srcChrom;
@@ -3576,8 +3581,9 @@ function replicationStarterTickFiltered(cellIdx, proteinType, shapeFilter) {
     world.replicase_job_targetShape[slot] = chromosomeShape(srcChrom);
     world.replicase_job_progress[slot] = landing;
     world.replicase_job_scanStart[slot] = landing;
-    world.replicase_job_scanRemaining[slot] = srcLen;
-    world.replicase_job_phase[slot] = 0;       // SCANNING
+    world.replicase_job_scanRemaining[slot] = (mode === 1) ? srcLen : 0;
+    world.replicase_job_phase[slot] = (mode === 1) ? 0 : 1;       // Advanced=SCAN, Basic=COPY directly
+    world.replicase_job_mode[slot] = mode;
     world.replicase_job_holding[slot] = 0;
     world.replicase_job_heldOpcode[slot] = 0;
     world.replicase_job_ticksLeft[slot] = CONFIG.replicaseTimeout;
@@ -3590,9 +3596,13 @@ function replicationStarterTickFiltered(cellIdx, proteinType, shapeFilter) {
 }
 
 function replicationStarterTick(cellIdx) {
-  replicationStarterTickFiltered(cellIdx, 22, -1);
+  // Type 22: Basic Replication Starter (any shape).
+  replicationStarterTickFiltered(cellIdx, 22, -1, 0);
+  // Type 42: Advanced Replication Starter (any shape).
+  replicationStarterTickFiltered(cellIdx, 42, -1, 1);
+  // Types 26..35: Advanced Replication Starters S0..S9 (shape-indexed).
   for (let s = 0; s < 10; s++) {
-    replicationStarterTickFiltered(cellIdx, 26 + s, s);
+    replicationStarterTickFiltered(cellIdx, 26 + s, s, 1);
   }
 }
 
@@ -3705,6 +3715,16 @@ function replicaseTick() {
     }
 
     // ---------- COPY PHASE ----------
+    const mode = world.replicase_job_mode[slot]; // 0=Basic, 1=Advanced
+
+    // Basic terminates when source is fully consumed (or when a switch-chromosome
+    // error has landed us past the end of a shorter source). Advanced wraps
+    // around the source and waits for an END marker.
+    if (mode === 0 && progress >= src.length) {
+      replicaseCompleteJob(slot, genome);
+      continue;
+    }
+
     let contributorId = getLineageId(src);
 
     // Noise-scaled error rate: junk cytoplasm proteins disrupt copy fidelity.
@@ -3720,6 +3740,8 @@ function replicaseTick() {
     // Jumps and other opcodes are NOT preserved — those evolve freely.
     const sourceByteAtRead = src[readPos];
     let copiedByte = sourceByteAtRead;
+    let skipEmit = false;       // skip-byte error: advance progress, emit nothing
+    let advanceProgress = true; // duplicate/insert errors: emit but hold position
 
     if (world.rng.next() < effectiveErrorRate) {
       const roll = world.rng.next();
@@ -3752,16 +3774,27 @@ function replicaseTick() {
           copiedByte = otherChrom[progress % otherChrom.length];
           contributorId = getLineageId(otherChrom);
         }
-      } else {
+      } else if (roll < 0.7) {
         copiedByte = world.rng.nextInt(256);
+      } else if (roll < 0.8) {
+        // Skip byte (deletion): advance progress, emit nothing this tick.
+        skipEmit = true;
+      } else if (roll < 0.9) {
+        // Duplicate byte (insertion): emit src byte, do not advance — next
+        // tick re-reads and re-emits the same byte.
+        advanceProgress = false;
+      } else {
+        // Insert random byte (insertion): emit random, do not advance — next
+        // tick re-reads the original src byte at this position.
+        copiedByte = world.rng.nextInt(256);
+        advanceProgress = false;
       }
     }
 
     // Marker preservation: if any error branch flipped this byte into or out
     // of REPLICASE_START / REPLICASE_END category compared to the source byte,
-    // revert to the source byte. This guarantees we never add or remove
-    // start/end markers via mutation. Jumps and other opcodes are unaffected.
-    {
+    // revert to the source byte. Skip-byte never emits, so it bypasses this.
+    if (!skipEmit) {
       const srcStart = sourceByteAtRead >= 0x10 && sourceByteAtRead <= 0x1F;
       const srcEnd   = sourceByteAtRead >= 0x20 && sourceByteAtRead <= 0x2F;
       const emStart  = copiedByte >= 0x10 && copiedByte <= 0x1F;
@@ -3769,13 +3802,36 @@ function replicaseTick() {
       if (srcStart !== emStart || srcEnd !== emEnd) copiedByte = sourceByteAtRead;
     }
 
-    // Emit and advance.
-    world.replicase_job_output[slot].push(copiedByte);
-    world.replicase_job_progress[slot] = (readPos + 1) % src.length;
-    if (contributorId > 0) {
-      const sb = world.replicase_job_sourceBytes[slot];
-      if (sb) sb.set(contributorId, (sb.get(contributorId) || 0) + 1);
+    // Emit (unless skip-byte error suppressed it).
+    if (!skipEmit) {
+      world.replicase_job_output[slot].push(copiedByte);
+      if (contributorId > 0) {
+        const sb = world.replicase_job_sourceBytes[slot];
+        if (sb) sb.set(contributorId, (sb.get(contributorId) || 0) + 1);
+      }
     }
+
+    // Advance progress unless an insertion error held the position.
+    // Advanced wraps modulo src.length; Basic uses absolute progress and
+    // terminates when it reaches src.length (handled at top of next tick or below).
+    if (advanceProgress) {
+      world.replicase_job_progress[slot] = (mode === 1)
+        ? ((readPos + 1) % src.length)
+        : (readPos + 1);
+    }
+
+    // Basic: replicase opcodes (END, JUMP_*) are pure data — no held-opcode
+    // dispatch, no early termination on END byte. Just check end-of-source.
+    if (mode === 0) {
+      if (world.replicase_job_progress[slot] >= src.length) {
+        replicaseCompleteJob(slot, genome);
+      }
+      continue;
+    }
+
+    // Advanced: held-opcode resolution and END-marker termination only run on
+    // ticks that actually emitted a byte (skip-byte errors fall through).
+    if (skipEmit) continue;
 
     // Interpret the emitted byte in the replicase's reading frame.
     if (world.replicase_job_holding[slot]) {

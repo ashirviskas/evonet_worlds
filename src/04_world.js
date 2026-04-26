@@ -71,6 +71,7 @@ const world = {
   replicase_job_sourceRef: null,   // Array of Uint8Array — authoritative source pointer (survives genome reordering)
   // New scan/copy-phase fields (see 17_replicase.js).
   replicase_job_phase: null,       // Uint8Array — 0=SCANNING for replicase_start, 1=COPYING
+  replicase_job_mode: null,        // Uint8Array — 0=Basic (dumb start-to-end copy, ignores replicase opcodes), 1=Advanced (current scan/jump/end behaviour)
   replicase_job_holding: null,     // Uint8Array — 1 if the next emitted byte is an arg for a held replicase-jump opcode
   replicase_job_heldOpcode: null,  // Uint8Array — the held opcode byte when holding=1
   replicase_job_scanStart: null,   // Uint16Array — initial landing position (fallback if scan finds no replicase_start)
@@ -202,6 +203,7 @@ function initWorld() {
   world.replicase_job_sourceBytes = new Array(jp).fill(null);
   world.replicase_job_sourceRef = new Array(jp).fill(null);
   world.replicase_job_phase = new Uint8Array(jp);
+  world.replicase_job_mode = new Uint8Array(jp);
   world.replicase_job_holding = new Uint8Array(jp);
   world.replicase_job_heldOpcode = new Uint8Array(jp);
   world.replicase_job_scanStart = new Uint16Array(jp);

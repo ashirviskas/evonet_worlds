@@ -127,7 +127,9 @@ function replicaseFreeAllForCell(cellIdx) {
 // shapeFilter in [0,9] restricts source selection to chromosomes whose
 // chromosomeShape() == shapeFilter. If no chromosome matches, the starter
 // protein is NOT consumed — it only "binds" when a substrate exists.
-function replicationStarterTickFiltered(cellIdx, proteinType, shapeFilter) {
+// mode: 0 = Basic (skip scan, dumb start-to-end copy, ignores replicase opcodes)
+//       1 = Advanced (current behaviour: scan, jumps, end-marker termination)
+function replicationStarterTickFiltered(cellIdx, proteinType, shapeFilter, mode) {
   let starters = world.internalProteins[cellIdx * 64 + proteinType];
   if (starters <= 0) return;
   const genome = world.genomes[cellIdx];
@@ -155,9 +157,9 @@ function replicationStarterTickFiltered(cellIdx, proteinType, shapeFilter) {
       : world.rng.nextInt(genome.length);
     const srcChrom = genome[srcIdx];
     const srcLen = srcChrom.length;
-    // Pick a uniform random landing byte within the source; the replicase will
-    // scan forward (wrapping) from there, looking for a REPLICASE_START marker.
-    const landing = srcLen > 0 ? world.rng.nextInt(srcLen) : 0;
+    // Advanced: pick a uniform random landing byte and scan forward from there.
+    // Basic: skip scan entirely; copy from byte 0.
+    const landing = (mode === 1 && srcLen > 0) ? world.rng.nextInt(srcLen) : 0;
     world.replicase_job_alive[slot] = 1;
     world.replicase_job_cellIdx[slot] = cellIdx;
     world.replicase_job_sourceRef[slot] = srcChrom;
@@ -165,8 +167,9 @@ function replicationStarterTickFiltered(cellIdx, proteinType, shapeFilter) {
     world.replicase_job_targetShape[slot] = chromosomeShape(srcChrom);
     world.replicase_job_progress[slot] = landing;
     world.replicase_job_scanStart[slot] = landing;
-    world.replicase_job_scanRemaining[slot] = srcLen;
-    world.replicase_job_phase[slot] = 0;       // SCANNING
+    world.replicase_job_scanRemaining[slot] = (mode === 1) ? srcLen : 0;
+    world.replicase_job_phase[slot] = (mode === 1) ? 0 : 1;       // Advanced=SCAN, Basic=COPY directly
+    world.replicase_job_mode[slot] = mode;
     world.replicase_job_holding[slot] = 0;
     world.replicase_job_heldOpcode[slot] = 0;
     world.replicase_job_ticksLeft[slot] = CONFIG.replicaseTimeout;
@@ -179,9 +182,13 @@ function replicationStarterTickFiltered(cellIdx, proteinType, shapeFilter) {
 }
 
 function replicationStarterTick(cellIdx) {
-  replicationStarterTickFiltered(cellIdx, 22, -1);
+  // Type 22: Basic Replication Starter (any shape).
+  replicationStarterTickFiltered(cellIdx, 22, -1, 0);
+  // Type 42: Advanced Replication Starter (any shape).
+  replicationStarterTickFiltered(cellIdx, 42, -1, 1);
+  // Types 26..35: Advanced Replication Starters S0..S9 (shape-indexed).
   for (let s = 0; s < 10; s++) {
-    replicationStarterTickFiltered(cellIdx, 26 + s, s);
+    replicationStarterTickFiltered(cellIdx, 26 + s, s, 1);
   }
 }
 
@@ -294,6 +301,16 @@ function replicaseTick() {
     }
 
     // ---------- COPY PHASE ----------
+    const mode = world.replicase_job_mode[slot]; // 0=Basic, 1=Advanced
+
+    // Basic terminates when source is fully consumed (or when a switch-chromosome
+    // error has landed us past the end of a shorter source). Advanced wraps
+    // around the source and waits for an END marker.
+    if (mode === 0 && progress >= src.length) {
+      replicaseCompleteJob(slot, genome);
+      continue;
+    }
+
     let contributorId = getLineageId(src);
 
     // Noise-scaled error rate: junk cytoplasm proteins disrupt copy fidelity.
@@ -309,6 +326,8 @@ function replicaseTick() {
     // Jumps and other opcodes are NOT preserved — those evolve freely.
     const sourceByteAtRead = src[readPos];
     let copiedByte = sourceByteAtRead;
+    let skipEmit = false;       // skip-byte error: advance progress, emit nothing
+    let advanceProgress = true; // duplicate/insert errors: emit but hold position
 
     if (world.rng.next() < effectiveErrorRate) {
       const roll = world.rng.next();
@@ -341,16 +360,27 @@ function replicaseTick() {
           copiedByte = otherChrom[progress % otherChrom.length];
           contributorId = getLineageId(otherChrom);
         }
-      } else {
+      } else if (roll < 0.7) {
         copiedByte = world.rng.nextInt(256);
+      } else if (roll < 0.8) {
+        // Skip byte (deletion): advance progress, emit nothing this tick.
+        skipEmit = true;
+      } else if (roll < 0.9) {
+        // Duplicate byte (insertion): emit src byte, do not advance — next
+        // tick re-reads and re-emits the same byte.
+        advanceProgress = false;
+      } else {
+        // Insert random byte (insertion): emit random, do not advance — next
+        // tick re-reads the original src byte at this position.
+        copiedByte = world.rng.nextInt(256);
+        advanceProgress = false;
       }
     }
 
     // Marker preservation: if any error branch flipped this byte into or out
     // of REPLICASE_START / REPLICASE_END category compared to the source byte,
-    // revert to the source byte. This guarantees we never add or remove
-    // start/end markers via mutation. Jumps and other opcodes are unaffected.
-    {
+    // revert to the source byte. Skip-byte never emits, so it bypasses this.
+    if (!skipEmit) {
       const srcStart = sourceByteAtRead >= 0x10 && sourceByteAtRead <= 0x1F;
       const srcEnd   = sourceByteAtRead >= 0x20 && sourceByteAtRead <= 0x2F;
       const emStart  = copiedByte >= 0x10 && copiedByte <= 0x1F;
@@ -358,13 +388,36 @@ function replicaseTick() {
       if (srcStart !== emStart || srcEnd !== emEnd) copiedByte = sourceByteAtRead;
     }
 
-    // Emit and advance.
-    world.replicase_job_output[slot].push(copiedByte);
-    world.replicase_job_progress[slot] = (readPos + 1) % src.length;
-    if (contributorId > 0) {
-      const sb = world.replicase_job_sourceBytes[slot];
-      if (sb) sb.set(contributorId, (sb.get(contributorId) || 0) + 1);
+    // Emit (unless skip-byte error suppressed it).
+    if (!skipEmit) {
+      world.replicase_job_output[slot].push(copiedByte);
+      if (contributorId > 0) {
+        const sb = world.replicase_job_sourceBytes[slot];
+        if (sb) sb.set(contributorId, (sb.get(contributorId) || 0) + 1);
+      }
     }
+
+    // Advance progress unless an insertion error held the position.
+    // Advanced wraps modulo src.length; Basic uses absolute progress and
+    // terminates when it reaches src.length (handled at top of next tick or below).
+    if (advanceProgress) {
+      world.replicase_job_progress[slot] = (mode === 1)
+        ? ((readPos + 1) % src.length)
+        : (readPos + 1);
+    }
+
+    // Basic: replicase opcodes (END, JUMP_*) are pure data — no held-opcode
+    // dispatch, no early termination on END byte. Just check end-of-source.
+    if (mode === 0) {
+      if (world.replicase_job_progress[slot] >= src.length) {
+        replicaseCompleteJob(slot, genome);
+      }
+      continue;
+    }
+
+    // Advanced: held-opcode resolution and END-marker termination only run on
+    // ticks that actually emitted a byte (skip-byte errors fall through).
+    if (skipEmit) continue;
 
     // Interpret the emitted byte in the replicase's reading frame.
     if (world.replicase_job_holding[slot]) {
