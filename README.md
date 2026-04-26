@@ -1,4 +1,6 @@
 # EVONET WORLDS
+Run it [here](https://ashirviskas.github.io/evonet_worlds/poc.html)
+
 Evonet Worlds is an evolution simulation. It started as a single HTML page PoC. 
 
 End goal of the project: Many worlds running on different player machines, sharing portals to each other allowing to run tons of evolution experiments at once and increasing the available world size. Possibly a Vulkan implementation for a huge speed boost, distributed on Steam.
