@@ -159,6 +159,198 @@ function renderDnaFull(chrom, label, riboOffset) {
   return h;
 }
 
+// LCS-based alignment of two chromosomes at the decoded-instruction level.
+// Byte-level alignment would happily match opcode bytes against argument bytes
+// and produce nonsense; instructions own their 1-or-2-byte payload, so aligning
+// on decoded lines keeps both the hex and decoded views coherent.
+//
+// Returns an ordered list of { kind, childLine, parentLine } where kind is one
+// of 'same' | 'changed' | 'insert' | 'remove'. Adjacent insert+remove runs of
+// equal length are re-paired into 'changed' so in-place mutations show as a
+// single red line rather than orange-add-then-orange-remove.
+//
+// Returns null on chromosomes longer than ALIGN_CAP — the popup falls back to
+// independent side-by-side rendering. Caps O(N·M) memory at ~16M cells max.
+const ALIGN_CAP = 4096;
+function alignChromosomes(childData, parentData) {
+  const c = decodeChromosome(childData);
+  const p = decodeChromosome(parentData);
+  if (c.length > ALIGN_CAP || p.length > ALIGN_CAP) return null;
+  const eqLine = (a, b) => {
+    if (a.bytes.length !== b.bytes.length) return false;
+    for (let k = 0; k < a.bytes.length; k++) if (a.bytes[k] !== b.bytes[k]) return false;
+    return true;
+  };
+  const N = c.length, M = p.length;
+  // dp[i][j] = LCS length of c[0..i) vs p[0..j).
+  const dp = new Array(N + 1);
+  for (let i = 0; i <= N; i++) dp[i] = new Uint32Array(M + 1);
+  for (let i = 1; i <= N; i++) for (let j = 1; j <= M; j++) {
+    dp[i][j] = eqLine(c[i - 1], p[j - 1])
+      ? dp[i - 1][j - 1] + 1
+      : (dp[i - 1][j] > dp[i][j - 1] ? dp[i - 1][j] : dp[i][j - 1]);
+  }
+  // Backtrack into reverse order, then flip.
+  const out = [];
+  let i = N, j = M;
+  while (i > 0 && j > 0) {
+    if (eqLine(c[i - 1], p[j - 1])) {
+      out.push({ kind: 'same', childLine: c[i - 1], parentLine: p[j - 1] });
+      i--; j--;
+    } else if (dp[i - 1][j] >= dp[i][j - 1]) {
+      out.push({ kind: 'insert', childLine: c[i - 1], parentLine: null });
+      i--;
+    } else {
+      out.push({ kind: 'remove', childLine: null, parentLine: p[j - 1] });
+      j--;
+    }
+  }
+  while (i > 0) { out.push({ kind: 'insert', childLine: c[--i], parentLine: null }); i; }
+  while (j > 0) { out.push({ kind: 'remove', childLine: null, parentLine: p[--j] }); j; }
+  out.reverse();
+
+  // Re-pair adjacent insert/remove runs of equal length into 'changed'. The
+  // ordering of insert vs remove inside a run is arbitrary from LCS — group
+  // them, then zip the two sub-runs into 'changed' entries when their lengths
+  // match. Otherwise leave them as separate insert/remove rows.
+  const result = [];
+  let k = 0;
+  while (k < out.length) {
+    if (out[k].kind === 'same') { result.push(out[k++]); continue; }
+    let runEnd = k;
+    while (runEnd < out.length && out[runEnd].kind !== 'same') runEnd++;
+    const inserts = [], removes = [];
+    for (let q = k; q < runEnd; q++) {
+      if (out[q].kind === 'insert') inserts.push(out[q].childLine);
+      else removes.push(out[q].parentLine);
+    }
+    const pairs = Math.min(inserts.length, removes.length);
+    for (let q = 0; q < pairs; q++) {
+      result.push({ kind: 'changed', childLine: inserts[q], parentLine: removes[q] });
+    }
+    for (let q = pairs; q < inserts.length; q++) result.push({ kind: 'insert', childLine: inserts[q], parentLine: null });
+    for (let q = pairs; q < removes.length; q++) result.push({ kind: 'remove', childLine: null, parentLine: removes[q] });
+    k = runEnd;
+  }
+  return result;
+}
+
+// Render a single chromosome panel (hex bytes + decoded pseudocode) with diff
+// coloring derived from an LCS alignment. Used in `show diff` mode for the
+// child-side and parent-side panels of the inspector. role ∈ {'child','parent'}
+// selects which alignment side to project onto this chromosome's instructions.
+//
+// Coloring (applies to both hex bytes and decoded lines):
+//   same    → existing opcode color
+//   changed → red    (#f66)
+//   insert  → orange (#fa0)   — child-only (only seen when role='child')
+//   remove  → orange (#fa0)   — parent-only (only seen when role='parent')
+function renderDnaFullDiff(chrom, label, alignment, role) {
+  const offsetKind = new Map();
+  for (const e of alignment) {
+    const ln = role === 'child' ? e.childLine : e.parentLine;
+    if (!ln) continue;
+    offsetKind.set(ln.off, e.kind);
+  }
+
+  const lines = decodeChromosome(chrom);
+  // Build per-byte kind map by walking instructions; bytes inherit their
+  // owning instruction's diff kind so the hex row tracks the decoded view.
+  const byteKind = new Array(chrom.length).fill('same');
+  for (const ln of lines) {
+    const k = offsetKind.get(ln.off) || 'same';
+    for (let q = 0; q < ln.bytes.length; q++) byteKind[ln.off + q] = k;
+  }
+
+  const colorForKind = (k, fallback) => {
+    if (k === 'changed') return '#f66';
+    if (k === 'insert' || k === 'remove') return '#fa0';
+    return fallback;
+  };
+
+  let h = '';
+  if (label) h += `<div style="margin-top:6px;"><b>${label}</b> (len=${chrom.length}, shape=${chromosomeShape(chrom)})</div>`;
+  h += `<div style="word-break:break-all; line-height:1.4; margin:4px 0; font-size:10px;">`;
+  for (let b = 0; b < chrom.length; b++) {
+    const byte = chrom[b], info = getOpcodeInfo(byte), hex = byte.toString(16).padStart(2, '0');
+    const style = `color:${colorForKind(byteKind[b], info.color)}`;
+    h += `<span class="dna-byte" style="${style}" data-tip="<span class='tip-title'>0x${hex}</span>\n<span class='tip-desc'>${esc(info.name)}</span>">${hex}</span> `;
+  }
+  h += `</div>`;
+  h += `<div style="color:#8cf; font-size:10px; margin-top:4px;">Decoded (${lines.length} ops)</div>`;
+  h += `<pre style="font-size:10px; line-height:1.3; margin:2px 0; white-space:pre-wrap; color:#bbb; background:#0a0a0a; padding:4px; border:1px solid #222; border-radius:3px;">`;
+  for (const ln of lines) {
+    const k = offsetKind.get(ln.off) || 'same';
+    h += `<span style="color:${colorForKind(k, ln.color)}">  ${esc(ln.text)}</span>\n`;
+  }
+  h += `</pre>`;
+  return h;
+}
+
+// Bottom hex-byte diff: both chromosomes shown as aligned hex rows. Uses the
+// LCS alignment so insertions/removals open a `··` gap on the opposite side
+// rather than misaligning every following byte (the bug in the prior naive
+// byte-index diff).
+function renderHexDiffBlock(alignment) {
+  let childRow = '', parentRow = '';
+  const span = (color, text, opacity) => `<span class="dna-byte" style="color:${color}${opacity ? `;opacity:${opacity}` : ''}">${text}</span> `;
+  for (const e of alignment) {
+    const cl = e.childLine, pl = e.parentLine;
+    if (cl && pl) {
+      const len = Math.max(cl.bytes.length, pl.bytes.length);
+      const cColor = e.kind === 'same' ? '#8c8' : '#f66';
+      const pColor = e.kind === 'same' ? '#88a' : '#fa6';
+      for (let i = 0; i < len; i++) {
+        const cb = i < cl.bytes.length ? cl.bytes[i] : null;
+        const pb = i < pl.bytes.length ? pl.bytes[i] : null;
+        childRow += cb !== null ? span(cColor, cb.toString(16).padStart(2, '0')) : span('#444', '··');
+        parentRow += pb !== null ? span(pColor, pb.toString(16).padStart(2, '0')) : span('#444', '··');
+      }
+    } else if (cl) {
+      for (const cb of cl.bytes) {
+        childRow += span('#fa0', cb.toString(16).padStart(2, '0'));
+        parentRow += span('#444', '··');
+      }
+    } else {
+      for (const pb of pl.bytes) {
+        childRow += span('#444', '··');
+        parentRow += span('#fa0', pb.toString(16).padStart(2, '0'));
+      }
+    }
+  }
+  return `<div style="margin-top:8px;font-size:10px;line-height:1.4;">` +
+    `<div style="color:#888;">child (LCS-aligned)</div>` +
+    `<div style="word-break:break-all;">${childRow}</div>` +
+    `<div style="color:#888;margin-top:4px;">parent</div>` +
+    `<div style="word-break:break-all;">${parentRow}</div>` +
+    `</div>`;
+}
+
+// Top-level diff renderer for the inspector. Layout:
+//   [child(hex+decoded, diff-coloured) | parent(hex+decoded, diff-coloured)]
+//   [LCS-aligned hex byte diff for both chromosomes]
+// Drops the prior redundant decoded-diff block — the side panels already show
+// each decoded view, just now with diff colouring.
+function renderDnaWithDiff(childData, parentData) {
+  const align = alignChromosomes(childData, parentData);
+  if (!align) {
+    // Over alignment cap: show both side-by-side without diff coloring.
+    let h = `<div style="color:#888;font-size:10px;margin:4px 0;">chromosome too large to align (&gt;${ALIGN_CAP} ops); showing both panels without diff colouring.</div>`;
+    h += `<div style="display:flex; gap:8px; align-items:flex-start;">` +
+      `<div style="flex:1; min-width:0;">${renderDnaFull(childData, 'chromosome', -1)}</div>` +
+      `<div style="flex:1; min-width:0; border-left:1px solid #2a2a2a; padding-left:8px;">${renderDnaFull(parentData, 'parent', -1)}</div>` +
+      `</div>`;
+    return h;
+  }
+
+  let h = `<div style="display:flex; gap:8px; align-items:flex-start;">` +
+    `<div style="flex:1; min-width:0;">${renderDnaFullDiff(childData, 'chromosome', align, 'child')}</div>` +
+    `<div style="flex:1; min-width:0; border-left:1px solid #2a2a2a; padding-left:8px;">${renderDnaFullDiff(parentData, 'parent', align, 'parent')}</div>` +
+    `</div>`;
+  h += renderHexDiffBlock(align);
+  return h;
+}
+
 // Pre-parse HSL colors into [h, s, l] arrays for rendering speed
 const PROTEIN_HSL = PROTEIN_INFO.map(info => {
   const m = info.color.match(/hsl\((\d+),\s*(\d+)%,\s*(\d+)%\)/);

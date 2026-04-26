@@ -124,6 +124,21 @@ function attachLineageFilter() {
   };
   slider.addEventListener('input', apply);
   apply();
+
+  const compactBtn = document.getElementById('lineage-compact-btn');
+  if (compactBtn) compactBtn.addEventListener('click', () => {
+    const before = lineage.nodes.size;
+    lineageCompact();
+    rebuildLineageLayout();
+    const after = lineage.nodes.size;
+    compactBtn.textContent = `compact tree (-${before - after})`;
+    setTimeout(() => { if (compactBtn.isConnected) compactBtn.textContent = 'compact tree'; }, 1500);
+    // If the popup was showing a node we just dropped, close it.
+    if (lineageView.selectedId > 0 && !lineage.nodes.has(lineageView.selectedId)) {
+      lineageView.selectedId = -1;
+      hideLineagePopup();
+    }
+  });
 }
 
 function lineageNodeRadius(n) {
@@ -547,26 +562,18 @@ function showLineagePopup(id, anchorX, anchorY) {
     return `  <span style="color:#bbb;">${isPrimary ? '★' : ' '} <a href="#" class="lineage-parent-link" data-pid="${pid}" style="color:#8cf;">#${pid}</a> — ${bytes}/${len} = ${pct}%</span>`;
   }).join('\n');
 
-  // Body has two regions:
-  //   top:    one or two side-by-side panes (child / parent) — parent only when diff is on
-  //   bottom: byte/decoded diff — only when diff is on AND primary exists
-  // Diff toggle is sticky across navigation; see lineageDiffOpen.
+  // Single decoded view. When diff is on AND a primary parent exists, the view
+  // is recoloured (and removed parent lines are interleaved as strikethrough
+  // phantoms) by renderDnaWithDiff. Diff toggle is sticky across navigation;
+  // see lineageDiffOpen.
   const showDiff = lineageDiffOpen && primary && primary.data;
   let dnaHtml = '';
   if (n.data) {
-    dnaHtml += `<div style="display:flex; gap:8px; align-items:flex-start;">`;
-    dnaHtml += `<div style="flex:1; min-width:0;">${renderDnaFull(n.data, `chromosome #${id}`, -1)}</div>`;
     if (showDiff) {
-      dnaHtml += `<div style="flex:1; min-width:0; border-left:1px solid #2a2a2a; padding-left:8px;">${renderDnaFull(primary.data, `parent #${primary.id}`, -1)}</div>`;
-    }
-    dnaHtml += `</div>`;
-    if (showDiff) {
-      const common = Math.min(n.data.length, primary.data.length);
-      let sameCount = 0;
-      for (let i = 0; i < common; i++) if (n.data[i] === primary.data[i]) sameCount++;
-      const samePct = common > 0 ? (sameCount / common * 100).toFixed(1) : '—';
-      dnaHtml += `<div style="margin-top:8px;color:#888;">diff vs primary parent <a href="#" class="lineage-parent-link" data-pid="${primary.id}" style="color:#8cf;">#${primary.id}</a>: ${sameCount}/${common} bytes identical (${samePct}%)</div>`;
-      dnaHtml += renderDnaDiff(n.data, primary.data);
+      dnaHtml += `<div style="margin-bottom:6px;color:#888;">diff vs primary parent <a href="#" class="lineage-parent-link" data-pid="${primary.id}" style="color:#8cf;">#${primary.id}</a></div>`;
+      dnaHtml += renderDnaWithDiff(n.data, primary.data);
+    } else {
+      dnaHtml += renderDnaFull(n.data, `chromosome #${id}`, -1);
     }
   }
 
@@ -581,7 +588,7 @@ function showLineagePopup(id, anchorX, anchorY) {
     `style="background:${diffDisabled ? '#222' : '#234'};color:${diffDisabled ? '#555' : '#ddd'};border:1px solid ${diffDisabled ? '#333' : '#468'};padding:1px 6px;cursor:${diffDisabled ? 'default' : 'pointer'};font-size:10px;">${diffLabel}</button>`;
   const titleBar =
     `<div class="lineage-popup-title" style="cursor:move;padding:4px 8px;background:#223;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">` +
-    `<b style="color:#8cf;">chromosome #${id}</b>` +
+    `<b style="color:#8cf;">chromosome #${id} · gen ${n.gen | 0}</b>` +
     `<span style="color:#888;">${n.event}${n.mergedCount ? ` (+${n.mergedCount} merged)` : ''}</span>` +
     `<span style="flex:1;"></span>` +
     `<button class="lineage-popup-highlight" data-id="${id}" data-mode="copies" style="background:#234;color:#ddd;border:1px solid #468;padding:1px 6px;cursor:pointer;font-size:10px;">highlight copies</button>` +
@@ -594,7 +601,7 @@ function showLineagePopup(id, anchorX, anchorY) {
 
   const header =
     `<div style="padding:6px 8px;border-bottom:1px solid #333;">` +
-    `<div>shape ${n.shape} · len ${n.length} · hash ${hash}</div>` +
+    `<div>shape ${n.shape} · len ${n.length} · gen ${n.gen | 0} · hash ${hash}</div>` +
     `<div>born tick ${n.birthTick} (age ${age})${n.alive ? ` · ${n.copies} live ${n.copies === 1 ? 'copy' : 'copies'}` : ' · dead at ' + n.deathTick} · ${n.copiesEver || 1} total appearances</div>` +
     `<div>descendants ever: ${n.descendantsEver}</div>` +
     (n.parents.length ? `<div style="margin-top:4px;">parents:</div><pre style="margin:0;white-space:pre-wrap;">${parentRows}</pre>` : `<div>parents: (root)</div>`) +
@@ -653,7 +660,7 @@ function wireLineagePopupEvents() {
   if (diffBtn) diffBtn.addEventListener('click', () => {
     lineageDiffOpen = !lineageDiffOpen;
     // Force a width adjustment ONCE on toggle so the user sees the expand/collapse.
-    // Don't stomp user-resized widths during regular re-renders — we only run on click.
+    // Don't stomp user-resized widths during regular re-renders — only on click.
     const w = lineageDiffOpen
       ? Math.min(900, window.innerWidth - 60)
       : Math.min(520, window.innerWidth - 60);
@@ -716,65 +723,3 @@ function makeDraggable(el, handle) {
   window.addEventListener('mouseup', () => { dragging = false; });
 }
 
-// Diff-render: two hex rows (child, primary parent), byte-aligned, with
-// mismatches highlighted red. Reuses the PROTEIN_INFO tooltip hook.
-function renderDnaDiff(childData, parentData) {
-  const n = Math.max(childData.length, parentData.length);
-  let childRow = '', parentRow = '';
-  for (let i = 0; i < n; i++) {
-    const cb = i < childData.length ? childData[i] : null;
-    const pb = i < parentData.length ? parentData[i] : null;
-    const cHex = cb === null ? '··' : cb.toString(16).padStart(2, '0');
-    const pHex = pb === null ? '··' : pb.toString(16).padStart(2, '0');
-    const mismatch = cb !== null && pb !== null && cb !== pb;
-    const onlyInChild = cb !== null && pb === null;
-    const onlyInParent = cb === null && pb !== null;
-    const childColor = onlyInChild ? '#fa0' : (mismatch ? '#f66' : (cb === null ? '#444' : '#8c8'));
-    const parentColor = onlyInParent ? '#fa0' : (mismatch ? '#fa6' : (pb === null ? '#444' : '#88a'));
-    const cInfo = cb !== null ? getOpcodeInfo(cb) : { name: '—' };
-    const pInfo = pb !== null ? getOpcodeInfo(pb) : { name: '—' };
-    childRow += `<span class="dna-byte" style="color:${childColor};" data-tip="<span class='tip-title'>byte ${i} child 0x${cHex}</span>\n<span class='tip-desc'>${esc(cInfo.name)}</span>">${cHex}</span> `;
-    parentRow += `<span class="dna-byte" style="color:${parentColor};" data-tip="<span class='tip-title'>byte ${i} parent 0x${pHex}</span>\n<span class='tip-desc'>${esc(pInfo.name)}</span>">${pHex}</span> `;
-  }
-  const hexBlock = `<div style="margin-top:6px;font-size:10px;line-height:1.4;"><div style="color:#888;">child</div><div style="word-break:break-all;">${childRow}</div><div style="color:#888;margin-top:4px;">parent</div><div style="word-break:break-all;">${parentRow}</div></div>`;
-
-  // Decoded instruction diff: one row per aligned-by-offset instruction pair.
-  // If the two decoded streams don't share the same offset sequence (insertion
-  // / deletion / length mismatch), fall back to side-by-side blocks with no
-  // per-line alignment.
-  const cLines = decodeChromosome(childData);
-  const pLines = decodeChromosome(parentData);
-  const offsetsAlign = cLines.length === pLines.length
-    && cLines.every((ln, i) => ln.off === pLines[i].off);
-
-  const preStyle = 'font-size:10px;line-height:1.3;margin:2px 0;white-space:pre;color:#bbb;background:#0a0a0a;padding:4px;border:1px solid #222;border-radius:3px;overflow-x:auto;';
-  let codeBlock = `<div style="color:#8cf;font-size:10px;margin-top:8px;">Decoded diff</div>`;
-
-  if (offsetsAlign) {
-    let childCode = '', parentCode = '';
-    for (let i = 0; i < cLines.length; i++) {
-      const cl = cLines[i], pl = pLines[i];
-      const differ = cl.text !== pl.text;
-      if (differ) {
-        childCode += `<span style="color:#f66;">${esc(cl.text)}</span>\n`;
-        parentCode += `<span style="color:#fa6;">${esc(pl.text)}</span>\n`;
-      } else {
-        childCode += `<span style="color:${cl.color};">${esc(cl.text)}</span>\n`;
-        parentCode += `<span style="color:${pl.color};">${esc(pl.text)}</span>\n`;
-      }
-    }
-    codeBlock += `<div style="display:flex;gap:8px;">` +
-      `<div style="flex:1;min-width:0;"><div style="color:#888;font-size:10px;">child code</div><pre style="${preStyle}">${childCode}</pre></div>` +
-      `<div style="flex:1;min-width:0;"><div style="color:#888;font-size:10px;">parent code</div><pre style="${preStyle}">${parentCode}</pre></div>` +
-      `</div>`;
-  } else {
-    const renderLines = (lines) => lines.map(ln => `<span style="color:${ln.color};">${esc(ln.text)}</span>`).join('\n');
-    codeBlock += `<div style="color:#888;font-size:10px;">offsets diverge — rendered independently</div>` +
-      `<div style="display:flex;gap:8px;">` +
-      `<div style="flex:1;min-width:0;"><div style="color:#888;font-size:10px;">child code</div><pre style="${preStyle}">${renderLines(cLines)}</pre></div>` +
-      `<div style="flex:1;min-width:0;"><div style="color:#888;font-size:10px;">parent code</div><pre style="${preStyle}">${renderLines(pLines)}</pre></div>` +
-      `</div>`;
-  }
-
-  return hexBlock + codeBlock;
-}

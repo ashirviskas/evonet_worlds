@@ -171,9 +171,14 @@ function assignLineage(chrom, parents, event, holder, parentBytes) {
     deathTick: 0,
     mergedCount: 0,            // how many collapsed waypoints are "summarised" by this node
     primaryParentId: parentsArr.length ? parentsArr[0] : -1, // recomputed once parentBytes is set
+    gen: 0,                    // generation depth via primary-parent chain; recomputed with primaryParentId
   };
   lineage.nodes.set(id, node);
   lineage.chromToId.set(chrom, id);
+  if (node.primaryParentId > 0) {
+    const pn = lineage.nodes.get(node.primaryParentId);
+    if (pn) node.gen = (pn.gen | 0) + 1;
+  }
 
   // Reverse index + rollups.
   for (const pid of parentsArr) {
@@ -336,18 +341,93 @@ function lineageCheckpoint(buf, parents, event, holder) {
 
 // Primary parent = the one contributing the most bytes relative to its own length.
 // Cached on the node; call after parentBytes is populated (replicase completion).
+// Also refreshes node.gen, which tracks depth via the primary-parent chain.
 function lineageRecomputePrimary(node) {
-  if (!node.parents.length) { node.primaryParentId = -1; return; }
-  if (node.parents.length === 1) { node.primaryParentId = node.parents[0]; return; }
-  let bestId = node.parents[0], bestBytes = -1;
-  for (let i = 0; i < node.parents.length; i++) {
-    const pid = node.parents[i];
-    const pn = lineage.nodes.get(pid);
-    if (!pn) continue;
-    const bytes = node.parentBytes ? (node.parentBytes[i] || 0) : pn.length;
-    if (bytes > bestBytes || (bytes === bestBytes && pid < bestId)) { bestBytes = bytes; bestId = pid; }
+  if (!node.parents.length) { node.primaryParentId = -1; node.gen = 0; return; }
+  if (node.parents.length === 1) {
+    node.primaryParentId = node.parents[0];
+  } else {
+    let bestId = node.parents[0], bestBytes = -1;
+    for (let i = 0; i < node.parents.length; i++) {
+      const pid = node.parents[i];
+      const pn = lineage.nodes.get(pid);
+      if (!pn) continue;
+      const bytes = node.parentBytes ? (node.parentBytes[i] || 0) : pn.length;
+      if (bytes > bestBytes || (bytes === bestBytes && pid < bestId)) { bestBytes = bytes; bestId = pid; }
+    }
+    node.primaryParentId = bestId;
   }
-  node.primaryParentId = bestId;
+  const pp = node.primaryParentId > 0 ? lineage.nodes.get(node.primaryParentId) : null;
+  node.gen = pp ? (pp.gen | 0) + 1 : 0;
+}
+
+// Repair counter drift: walk every actual buffer the world holds, recompute
+// copies / copiesIn{Cells,Free} / alive / directChildrenAlive / descendantsAlive
+// from ground truth. Long-running sessions accumulate "phantom alive" nodes
+// when assignLineage / lineageMarkDead don't perfectly pair up across all
+// transfer paths; this is the canonical fsck. Cheap: O(buffers + N + edges).
+function lineageRebuildLiveness() {
+  const cellCount = new Map(), freeCount = new Map();
+  for (let ci = 0; ci < world.maxCells; ci++) {
+    if (!world.alive[ci]) continue;
+    const g = world.genomes[ci]; if (!g) continue;
+    for (const chrom of g) {
+      const id = getLineageId(chrom); if (id <= 0) continue;
+      cellCount.set(id, (cellCount.get(id) || 0) + 1);
+    }
+  }
+  for (const fc of world.freeChromosomes) {
+    const id = getLineageId(fc.data); if (id <= 0) continue;
+    freeCount.set(id, (freeCount.get(id) || 0) + 1);
+  }
+
+  for (const [id, n] of lineage.nodes) {
+    const c = cellCount.get(id) || 0, f = freeCount.get(id) || 0;
+    const wasAlive = !!n.alive;
+    n.copiesInCells = c;
+    n.copiesInFree  = f;
+    n.copies        = c + f;
+    n.alive = (n.copies > 0) ? 1 : 0;
+    if (wasAlive && !n.alive && !n.deathTick) n.deathTick = world.tick;
+    if (!wasAlive && n.alive) n.deathTick = 0;
+  }
+
+  for (const n of lineage.nodes.values()) n.directChildrenAlive = 0;
+  for (const [pid, kids] of lineage.children) {
+    const pn = lineage.nodes.get(pid); if (!pn) continue;
+    let live = 0;
+    for (const kid of kids) {
+      const kn = lineage.nodes.get(kid);
+      if (kn && kn.alive) live++;
+    }
+    pn.directChildrenAlive = live;
+  }
+
+  for (const n of lineage.nodes.values()) n.descendantsAlive = 0;
+  for (const n of lineage.nodes.values()) {
+    if (!n.alive || !n.contributesToDescendants) continue;
+    lineageWalkAncestorsAlive(n, +1);
+  }
+
+  lineage.structVersion++;
+}
+
+// Manual aggressive cleanup. Reconciles counters first, then drops dead nodes
+// with no living descendants ignoring the prolific-lineage pin, then collapses
+// remaining 1-1 chains the same way. Wired to a "compact tree" button.
+function lineageCompact() {
+  lineageRebuildLiveness();
+  const dropIds = [];
+  for (const [id, n] of lineage.nodes) {
+    if (n.alive) continue;
+    if (n.directChildrenAlive > 0) continue;
+    const kids = lineage.children.get(id);
+    if (kids && kids.size > 0) continue;
+    if ((n.descendantsAlive || 0) > 0) continue;
+    dropIds.push(id);
+  }
+  for (const id of dropIds) lineageDropNode(id);
+  lineageChainCollapse(0, /*ignorePin=*/true);
 }
 
 function lineagePrune() {
@@ -416,8 +496,9 @@ function lineagePrune() {
 // Keeps the DAG intact: never touches multi-parent nodes or forks. Pinned
 // (prolific) waypoints are skipped so once-successful lineages keep their
 // visual identity in the tree even when they happen to sit in a 1-1 chain.
-function lineageChainCollapse(target) {
-  const pin = CONFIG.lineagePreserveCopiesEver | 0;
+// `ignorePin` (used by lineageCompact) lets a manual cleanup steamroll past pins.
+function lineageChainCollapse(target, ignorePin) {
+  const pin = ignorePin ? 0 : (CONFIG.lineagePreserveCopiesEver | 0);
   const candidates = [];
   for (const [id, n] of lineage.nodes) {
     if (n.parents.length !== 1) continue;
@@ -461,8 +542,9 @@ function lineageChainCollapse(target) {
     lineageRemoveChild(id, childId);
     lineageAddChild(parentId, childId);
 
-    // Transfer primary-parent if it pointed at the waypoint.
+    // Transfer primary-parent if it pointed at the waypoint, then refresh gen.
     if (child.primaryParentId === id) child.primaryParentId = parentId;
+    lineageRecomputePrimary(child);
 
     // Transfer refcount state from waypoint into the kept parent. Post-collapse,
     // chromosomes whose chromToId still points at K will resolve to P via the

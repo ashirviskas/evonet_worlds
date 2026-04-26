@@ -92,6 +92,7 @@ canvas { display: block; width: 100%; height: 100%; }
     <label for="lineage-min-copies">min copies:</label>
     <input type="range" id="lineage-min-copies" min="1" max="15" value="1">
     <span id="lineage-min-copies-val">1</span>
+    <button id="lineage-compact-btn" title="Reconcile counters with actual buffers, then drop dead nodes with no live descendants (ignores prolific-lineage pin)" style="margin-left:8px;background:#234;color:#ddd;border:1px solid #468;padding:1px 6px;cursor:pointer;font-size:10px;">compact tree</button>
   </div>
 </div>
 <div class="resizer" id="resizer-left" data-target="lineage-panel" data-dir="right"></div>

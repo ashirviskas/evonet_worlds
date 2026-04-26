@@ -190,6 +190,31 @@ async function loadWorldFromFile(file) {
   lineage.redirects = new Map(snap.lineage.redirects);
   lineage.chromToId = new WeakMap();
 
+  // Backfill `gen` for legacy saves (BFS from roots, gen = primary-parent's gen + 1).
+  if (lineage.nodes.size && [...lineage.nodes.values()].some(n => n.gen === undefined)) {
+    for (const n of lineage.nodes.values()) n.gen = -1;
+    const queue = [];
+    for (const [id, n] of lineage.nodes) {
+      if (!(n.primaryParentId > 0) || !lineage.nodes.has(n.primaryParentId)) {
+        n.gen = 0; queue.push(id);
+      }
+    }
+    while (queue.length) {
+      const pid = queue.shift();
+      const pn = lineage.nodes.get(pid); if (!pn) continue;
+      const kids = lineage.children.get(pid); if (!kids) continue;
+      for (const kid of kids) {
+        const kn = lineage.nodes.get(kid); if (!kn) continue;
+        if (kn.primaryParentId !== pid) continue;
+        if (kn.gen >= 0) continue;
+        kn.gen = (pn.gen | 0) + 1;
+        queue.push(kid);
+      }
+    }
+    // Any node still at -1 (cycle / detached primary chain) → fall back to 0.
+    for (const n of lineage.nodes.values()) if (n.gen < 0) n.gen = 0;
+  }
+
   // Re-register each chromosome with its carried lineage id.
   for (let ci = 0; ci < world.maxCells; ci++) {
     const g = world.genomes[ci];
@@ -204,6 +229,12 @@ async function loadWorldFromFile(file) {
     const lid = snap.world.freeChromosomes[i] && snap.world.freeChromosomes[i].data.lineageId;
     if (lid > 0) lineage.chromToId.set(world.freeChromosomes[i].data, lid);
   }
+
+  // Reconcile counters with actual buffers (saved snapshot can carry phantom
+  // alive nodes from pre-save drift), then run normal-policy prune once so
+  // newly-dead nodes from the rebuild start their grace clock from now.
+  lineageRebuildLiveness();
+  lineagePrune();
 
   // 6. Rebuild spatial grids. Clear buckets + per-item indices, then the
   // existing incremental rebuilders re-insert from current positions.

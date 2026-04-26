@@ -92,6 +92,7 @@ canvas { display: block; width: 100%; height: 100%; }
     <label for="lineage-min-copies">min copies:</label>
     <input type="range" id="lineage-min-copies" min="1" max="15" value="1">
     <span id="lineage-min-copies-val">1</span>
+    <button id="lineage-compact-btn" title="Reconcile counters with actual buffers, then drop dead nodes with no live descendants (ignores prolific-lineage pin)" style="margin-left:8px;background:#234;color:#ddd;border:1px solid #468;padding:1px 6px;cursor:pointer;font-size:10px;">compact tree</button>
   </div>
 </div>
 <div class="resizer" id="resizer-left" data-target="lineage-panel" data-dir="right"></div>
@@ -657,6 +658,198 @@ function renderDnaFull(chrom, label, riboOffset) {
     }
   }
   h += `</pre>`;
+  return h;
+}
+
+// LCS-based alignment of two chromosomes at the decoded-instruction level.
+// Byte-level alignment would happily match opcode bytes against argument bytes
+// and produce nonsense; instructions own their 1-or-2-byte payload, so aligning
+// on decoded lines keeps both the hex and decoded views coherent.
+//
+// Returns an ordered list of { kind, childLine, parentLine } where kind is one
+// of 'same' | 'changed' | 'insert' | 'remove'. Adjacent insert+remove runs of
+// equal length are re-paired into 'changed' so in-place mutations show as a
+// single red line rather than orange-add-then-orange-remove.
+//
+// Returns null on chromosomes longer than ALIGN_CAP — the popup falls back to
+// independent side-by-side rendering. Caps O(N·M) memory at ~16M cells max.
+const ALIGN_CAP = 4096;
+function alignChromosomes(childData, parentData) {
+  const c = decodeChromosome(childData);
+  const p = decodeChromosome(parentData);
+  if (c.length > ALIGN_CAP || p.length > ALIGN_CAP) return null;
+  const eqLine = (a, b) => {
+    if (a.bytes.length !== b.bytes.length) return false;
+    for (let k = 0; k < a.bytes.length; k++) if (a.bytes[k] !== b.bytes[k]) return false;
+    return true;
+  };
+  const N = c.length, M = p.length;
+  // dp[i][j] = LCS length of c[0..i) vs p[0..j).
+  const dp = new Array(N + 1);
+  for (let i = 0; i <= N; i++) dp[i] = new Uint32Array(M + 1);
+  for (let i = 1; i <= N; i++) for (let j = 1; j <= M; j++) {
+    dp[i][j] = eqLine(c[i - 1], p[j - 1])
+      ? dp[i - 1][j - 1] + 1
+      : (dp[i - 1][j] > dp[i][j - 1] ? dp[i - 1][j] : dp[i][j - 1]);
+  }
+  // Backtrack into reverse order, then flip.
+  const out = [];
+  let i = N, j = M;
+  while (i > 0 && j > 0) {
+    if (eqLine(c[i - 1], p[j - 1])) {
+      out.push({ kind: 'same', childLine: c[i - 1], parentLine: p[j - 1] });
+      i--; j--;
+    } else if (dp[i - 1][j] >= dp[i][j - 1]) {
+      out.push({ kind: 'insert', childLine: c[i - 1], parentLine: null });
+      i--;
+    } else {
+      out.push({ kind: 'remove', childLine: null, parentLine: p[j - 1] });
+      j--;
+    }
+  }
+  while (i > 0) { out.push({ kind: 'insert', childLine: c[--i], parentLine: null }); i; }
+  while (j > 0) { out.push({ kind: 'remove', childLine: null, parentLine: p[--j] }); j; }
+  out.reverse();
+
+  // Re-pair adjacent insert/remove runs of equal length into 'changed'. The
+  // ordering of insert vs remove inside a run is arbitrary from LCS — group
+  // them, then zip the two sub-runs into 'changed' entries when their lengths
+  // match. Otherwise leave them as separate insert/remove rows.
+  const result = [];
+  let k = 0;
+  while (k < out.length) {
+    if (out[k].kind === 'same') { result.push(out[k++]); continue; }
+    let runEnd = k;
+    while (runEnd < out.length && out[runEnd].kind !== 'same') runEnd++;
+    const inserts = [], removes = [];
+    for (let q = k; q < runEnd; q++) {
+      if (out[q].kind === 'insert') inserts.push(out[q].childLine);
+      else removes.push(out[q].parentLine);
+    }
+    const pairs = Math.min(inserts.length, removes.length);
+    for (let q = 0; q < pairs; q++) {
+      result.push({ kind: 'changed', childLine: inserts[q], parentLine: removes[q] });
+    }
+    for (let q = pairs; q < inserts.length; q++) result.push({ kind: 'insert', childLine: inserts[q], parentLine: null });
+    for (let q = pairs; q < removes.length; q++) result.push({ kind: 'remove', childLine: null, parentLine: removes[q] });
+    k = runEnd;
+  }
+  return result;
+}
+
+// Render a single chromosome panel (hex bytes + decoded pseudocode) with diff
+// coloring derived from an LCS alignment. Used in `show diff` mode for the
+// child-side and parent-side panels of the inspector. role ∈ {'child','parent'}
+// selects which alignment side to project onto this chromosome's instructions.
+//
+// Coloring (applies to both hex bytes and decoded lines):
+//   same    → existing opcode color
+//   changed → red    (#f66)
+//   insert  → orange (#fa0)   — child-only (only seen when role='child')
+//   remove  → orange (#fa0)   — parent-only (only seen when role='parent')
+function renderDnaFullDiff(chrom, label, alignment, role) {
+  const offsetKind = new Map();
+  for (const e of alignment) {
+    const ln = role === 'child' ? e.childLine : e.parentLine;
+    if (!ln) continue;
+    offsetKind.set(ln.off, e.kind);
+  }
+
+  const lines = decodeChromosome(chrom);
+  // Build per-byte kind map by walking instructions; bytes inherit their
+  // owning instruction's diff kind so the hex row tracks the decoded view.
+  const byteKind = new Array(chrom.length).fill('same');
+  for (const ln of lines) {
+    const k = offsetKind.get(ln.off) || 'same';
+    for (let q = 0; q < ln.bytes.length; q++) byteKind[ln.off + q] = k;
+  }
+
+  const colorForKind = (k, fallback) => {
+    if (k === 'changed') return '#f66';
+    if (k === 'insert' || k === 'remove') return '#fa0';
+    return fallback;
+  };
+
+  let h = '';
+  if (label) h += `<div style="margin-top:6px;"><b>${label}</b> (len=${chrom.length}, shape=${chromosomeShape(chrom)})</div>`;
+  h += `<div style="word-break:break-all; line-height:1.4; margin:4px 0; font-size:10px;">`;
+  for (let b = 0; b < chrom.length; b++) {
+    const byte = chrom[b], info = getOpcodeInfo(byte), hex = byte.toString(16).padStart(2, '0');
+    const style = `color:${colorForKind(byteKind[b], info.color)}`;
+    h += `<span class="dna-byte" style="${style}" data-tip="<span class='tip-title'>0x${hex}</span>\n<span class='tip-desc'>${esc(info.name)}</span>">${hex}</span> `;
+  }
+  h += `</div>`;
+  h += `<div style="color:#8cf; font-size:10px; margin-top:4px;">Decoded (${lines.length} ops)</div>`;
+  h += `<pre style="font-size:10px; line-height:1.3; margin:2px 0; white-space:pre-wrap; color:#bbb; background:#0a0a0a; padding:4px; border:1px solid #222; border-radius:3px;">`;
+  for (const ln of lines) {
+    const k = offsetKind.get(ln.off) || 'same';
+    h += `<span style="color:${colorForKind(k, ln.color)}">  ${esc(ln.text)}</span>\n`;
+  }
+  h += `</pre>`;
+  return h;
+}
+
+// Bottom hex-byte diff: both chromosomes shown as aligned hex rows. Uses the
+// LCS alignment so insertions/removals open a `··` gap on the opposite side
+// rather than misaligning every following byte (the bug in the prior naive
+// byte-index diff).
+function renderHexDiffBlock(alignment) {
+  let childRow = '', parentRow = '';
+  const span = (color, text, opacity) => `<span class="dna-byte" style="color:${color}${opacity ? `;opacity:${opacity}` : ''}">${text}</span> `;
+  for (const e of alignment) {
+    const cl = e.childLine, pl = e.parentLine;
+    if (cl && pl) {
+      const len = Math.max(cl.bytes.length, pl.bytes.length);
+      const cColor = e.kind === 'same' ? '#8c8' : '#f66';
+      const pColor = e.kind === 'same' ? '#88a' : '#fa6';
+      for (let i = 0; i < len; i++) {
+        const cb = i < cl.bytes.length ? cl.bytes[i] : null;
+        const pb = i < pl.bytes.length ? pl.bytes[i] : null;
+        childRow += cb !== null ? span(cColor, cb.toString(16).padStart(2, '0')) : span('#444', '··');
+        parentRow += pb !== null ? span(pColor, pb.toString(16).padStart(2, '0')) : span('#444', '··');
+      }
+    } else if (cl) {
+      for (const cb of cl.bytes) {
+        childRow += span('#fa0', cb.toString(16).padStart(2, '0'));
+        parentRow += span('#444', '··');
+      }
+    } else {
+      for (const pb of pl.bytes) {
+        childRow += span('#444', '··');
+        parentRow += span('#fa0', pb.toString(16).padStart(2, '0'));
+      }
+    }
+  }
+  return `<div style="margin-top:8px;font-size:10px;line-height:1.4;">` +
+    `<div style="color:#888;">child (LCS-aligned)</div>` +
+    `<div style="word-break:break-all;">${childRow}</div>` +
+    `<div style="color:#888;margin-top:4px;">parent</div>` +
+    `<div style="word-break:break-all;">${parentRow}</div>` +
+    `</div>`;
+}
+
+// Top-level diff renderer for the inspector. Layout:
+//   [child(hex+decoded, diff-coloured) | parent(hex+decoded, diff-coloured)]
+//   [LCS-aligned hex byte diff for both chromosomes]
+// Drops the prior redundant decoded-diff block — the side panels already show
+// each decoded view, just now with diff colouring.
+function renderDnaWithDiff(childData, parentData) {
+  const align = alignChromosomes(childData, parentData);
+  if (!align) {
+    // Over alignment cap: show both side-by-side without diff coloring.
+    let h = `<div style="color:#888;font-size:10px;margin:4px 0;">chromosome too large to align (&gt;${ALIGN_CAP} ops); showing both panels without diff colouring.</div>`;
+    h += `<div style="display:flex; gap:8px; align-items:flex-start;">` +
+      `<div style="flex:1; min-width:0;">${renderDnaFull(childData, 'chromosome', -1)}</div>` +
+      `<div style="flex:1; min-width:0; border-left:1px solid #2a2a2a; padding-left:8px;">${renderDnaFull(parentData, 'parent', -1)}</div>` +
+      `</div>`;
+    return h;
+  }
+
+  let h = `<div style="display:flex; gap:8px; align-items:flex-start;">` +
+    `<div style="flex:1; min-width:0;">${renderDnaFullDiff(childData, 'chromosome', align, 'child')}</div>` +
+    `<div style="flex:1; min-width:0; border-left:1px solid #2a2a2a; padding-left:8px;">${renderDnaFullDiff(parentData, 'parent', align, 'parent')}</div>` +
+    `</div>`;
+  h += renderHexDiffBlock(align);
   return h;
 }
 
@@ -2732,9 +2925,14 @@ function assignLineage(chrom, parents, event, holder, parentBytes) {
     deathTick: 0,
     mergedCount: 0,            // how many collapsed waypoints are "summarised" by this node
     primaryParentId: parentsArr.length ? parentsArr[0] : -1, // recomputed once parentBytes is set
+    gen: 0,                    // generation depth via primary-parent chain; recomputed with primaryParentId
   };
   lineage.nodes.set(id, node);
   lineage.chromToId.set(chrom, id);
+  if (node.primaryParentId > 0) {
+    const pn = lineage.nodes.get(node.primaryParentId);
+    if (pn) node.gen = (pn.gen | 0) + 1;
+  }
 
   // Reverse index + rollups.
   for (const pid of parentsArr) {
@@ -2897,18 +3095,93 @@ function lineageCheckpoint(buf, parents, event, holder) {
 
 // Primary parent = the one contributing the most bytes relative to its own length.
 // Cached on the node; call after parentBytes is populated (replicase completion).
+// Also refreshes node.gen, which tracks depth via the primary-parent chain.
 function lineageRecomputePrimary(node) {
-  if (!node.parents.length) { node.primaryParentId = -1; return; }
-  if (node.parents.length === 1) { node.primaryParentId = node.parents[0]; return; }
-  let bestId = node.parents[0], bestBytes = -1;
-  for (let i = 0; i < node.parents.length; i++) {
-    const pid = node.parents[i];
-    const pn = lineage.nodes.get(pid);
-    if (!pn) continue;
-    const bytes = node.parentBytes ? (node.parentBytes[i] || 0) : pn.length;
-    if (bytes > bestBytes || (bytes === bestBytes && pid < bestId)) { bestBytes = bytes; bestId = pid; }
+  if (!node.parents.length) { node.primaryParentId = -1; node.gen = 0; return; }
+  if (node.parents.length === 1) {
+    node.primaryParentId = node.parents[0];
+  } else {
+    let bestId = node.parents[0], bestBytes = -1;
+    for (let i = 0; i < node.parents.length; i++) {
+      const pid = node.parents[i];
+      const pn = lineage.nodes.get(pid);
+      if (!pn) continue;
+      const bytes = node.parentBytes ? (node.parentBytes[i] || 0) : pn.length;
+      if (bytes > bestBytes || (bytes === bestBytes && pid < bestId)) { bestBytes = bytes; bestId = pid; }
+    }
+    node.primaryParentId = bestId;
   }
-  node.primaryParentId = bestId;
+  const pp = node.primaryParentId > 0 ? lineage.nodes.get(node.primaryParentId) : null;
+  node.gen = pp ? (pp.gen | 0) + 1 : 0;
+}
+
+// Repair counter drift: walk every actual buffer the world holds, recompute
+// copies / copiesIn{Cells,Free} / alive / directChildrenAlive / descendantsAlive
+// from ground truth. Long-running sessions accumulate "phantom alive" nodes
+// when assignLineage / lineageMarkDead don't perfectly pair up across all
+// transfer paths; this is the canonical fsck. Cheap: O(buffers + N + edges).
+function lineageRebuildLiveness() {
+  const cellCount = new Map(), freeCount = new Map();
+  for (let ci = 0; ci < world.maxCells; ci++) {
+    if (!world.alive[ci]) continue;
+    const g = world.genomes[ci]; if (!g) continue;
+    for (const chrom of g) {
+      const id = getLineageId(chrom); if (id <= 0) continue;
+      cellCount.set(id, (cellCount.get(id) || 0) + 1);
+    }
+  }
+  for (const fc of world.freeChromosomes) {
+    const id = getLineageId(fc.data); if (id <= 0) continue;
+    freeCount.set(id, (freeCount.get(id) || 0) + 1);
+  }
+
+  for (const [id, n] of lineage.nodes) {
+    const c = cellCount.get(id) || 0, f = freeCount.get(id) || 0;
+    const wasAlive = !!n.alive;
+    n.copiesInCells = c;
+    n.copiesInFree  = f;
+    n.copies        = c + f;
+    n.alive = (n.copies > 0) ? 1 : 0;
+    if (wasAlive && !n.alive && !n.deathTick) n.deathTick = world.tick;
+    if (!wasAlive && n.alive) n.deathTick = 0;
+  }
+
+  for (const n of lineage.nodes.values()) n.directChildrenAlive = 0;
+  for (const [pid, kids] of lineage.children) {
+    const pn = lineage.nodes.get(pid); if (!pn) continue;
+    let live = 0;
+    for (const kid of kids) {
+      const kn = lineage.nodes.get(kid);
+      if (kn && kn.alive) live++;
+    }
+    pn.directChildrenAlive = live;
+  }
+
+  for (const n of lineage.nodes.values()) n.descendantsAlive = 0;
+  for (const n of lineage.nodes.values()) {
+    if (!n.alive || !n.contributesToDescendants) continue;
+    lineageWalkAncestorsAlive(n, +1);
+  }
+
+  lineage.structVersion++;
+}
+
+// Manual aggressive cleanup. Reconciles counters first, then drops dead nodes
+// with no living descendants ignoring the prolific-lineage pin, then collapses
+// remaining 1-1 chains the same way. Wired to a "compact tree" button.
+function lineageCompact() {
+  lineageRebuildLiveness();
+  const dropIds = [];
+  for (const [id, n] of lineage.nodes) {
+    if (n.alive) continue;
+    if (n.directChildrenAlive > 0) continue;
+    const kids = lineage.children.get(id);
+    if (kids && kids.size > 0) continue;
+    if ((n.descendantsAlive || 0) > 0) continue;
+    dropIds.push(id);
+  }
+  for (const id of dropIds) lineageDropNode(id);
+  lineageChainCollapse(0, /*ignorePin=*/true);
 }
 
 function lineagePrune() {
@@ -2977,8 +3250,9 @@ function lineagePrune() {
 // Keeps the DAG intact: never touches multi-parent nodes or forks. Pinned
 // (prolific) waypoints are skipped so once-successful lineages keep their
 // visual identity in the tree even when they happen to sit in a 1-1 chain.
-function lineageChainCollapse(target) {
-  const pin = CONFIG.lineagePreserveCopiesEver | 0;
+// `ignorePin` (used by lineageCompact) lets a manual cleanup steamroll past pins.
+function lineageChainCollapse(target, ignorePin) {
+  const pin = ignorePin ? 0 : (CONFIG.lineagePreserveCopiesEver | 0);
   const candidates = [];
   for (const [id, n] of lineage.nodes) {
     if (n.parents.length !== 1) continue;
@@ -3022,8 +3296,9 @@ function lineageChainCollapse(target) {
     lineageRemoveChild(id, childId);
     lineageAddChild(parentId, childId);
 
-    // Transfer primary-parent if it pointed at the waypoint.
+    // Transfer primary-parent if it pointed at the waypoint, then refresh gen.
     if (child.primaryParentId === id) child.primaryParentId = parentId;
+    lineageRecomputePrimary(child);
 
     // Transfer refcount state from waypoint into the kept parent. Post-collapse,
     // chromosomes whose chromToId still points at K will resolve to P via the
@@ -4750,6 +5025,21 @@ function attachLineageFilter() {
   };
   slider.addEventListener('input', apply);
   apply();
+
+  const compactBtn = document.getElementById('lineage-compact-btn');
+  if (compactBtn) compactBtn.addEventListener('click', () => {
+    const before = lineage.nodes.size;
+    lineageCompact();
+    rebuildLineageLayout();
+    const after = lineage.nodes.size;
+    compactBtn.textContent = `compact tree (-${before - after})`;
+    setTimeout(() => { if (compactBtn.isConnected) compactBtn.textContent = 'compact tree'; }, 1500);
+    // If the popup was showing a node we just dropped, close it.
+    if (lineageView.selectedId > 0 && !lineage.nodes.has(lineageView.selectedId)) {
+      lineageView.selectedId = -1;
+      hideLineagePopup();
+    }
+  });
 }
 
 function lineageNodeRadius(n) {
@@ -5173,26 +5463,18 @@ function showLineagePopup(id, anchorX, anchorY) {
     return `  <span style="color:#bbb;">${isPrimary ? '★' : ' '} <a href="#" class="lineage-parent-link" data-pid="${pid}" style="color:#8cf;">#${pid}</a> — ${bytes}/${len} = ${pct}%</span>`;
   }).join('\n');
 
-  // Body has two regions:
-  //   top:    one or two side-by-side panes (child / parent) — parent only when diff is on
-  //   bottom: byte/decoded diff — only when diff is on AND primary exists
-  // Diff toggle is sticky across navigation; see lineageDiffOpen.
+  // Single decoded view. When diff is on AND a primary parent exists, the view
+  // is recoloured (and removed parent lines are interleaved as strikethrough
+  // phantoms) by renderDnaWithDiff. Diff toggle is sticky across navigation;
+  // see lineageDiffOpen.
   const showDiff = lineageDiffOpen && primary && primary.data;
   let dnaHtml = '';
   if (n.data) {
-    dnaHtml += `<div style="display:flex; gap:8px; align-items:flex-start;">`;
-    dnaHtml += `<div style="flex:1; min-width:0;">${renderDnaFull(n.data, `chromosome #${id}`, -1)}</div>`;
     if (showDiff) {
-      dnaHtml += `<div style="flex:1; min-width:0; border-left:1px solid #2a2a2a; padding-left:8px;">${renderDnaFull(primary.data, `parent #${primary.id}`, -1)}</div>`;
-    }
-    dnaHtml += `</div>`;
-    if (showDiff) {
-      const common = Math.min(n.data.length, primary.data.length);
-      let sameCount = 0;
-      for (let i = 0; i < common; i++) if (n.data[i] === primary.data[i]) sameCount++;
-      const samePct = common > 0 ? (sameCount / common * 100).toFixed(1) : '—';
-      dnaHtml += `<div style="margin-top:8px;color:#888;">diff vs primary parent <a href="#" class="lineage-parent-link" data-pid="${primary.id}" style="color:#8cf;">#${primary.id}</a>: ${sameCount}/${common} bytes identical (${samePct}%)</div>`;
-      dnaHtml += renderDnaDiff(n.data, primary.data);
+      dnaHtml += `<div style="margin-bottom:6px;color:#888;">diff vs primary parent <a href="#" class="lineage-parent-link" data-pid="${primary.id}" style="color:#8cf;">#${primary.id}</a></div>`;
+      dnaHtml += renderDnaWithDiff(n.data, primary.data);
+    } else {
+      dnaHtml += renderDnaFull(n.data, `chromosome #${id}`, -1);
     }
   }
 
@@ -5207,7 +5489,7 @@ function showLineagePopup(id, anchorX, anchorY) {
     `style="background:${diffDisabled ? '#222' : '#234'};color:${diffDisabled ? '#555' : '#ddd'};border:1px solid ${diffDisabled ? '#333' : '#468'};padding:1px 6px;cursor:${diffDisabled ? 'default' : 'pointer'};font-size:10px;">${diffLabel}</button>`;
   const titleBar =
     `<div class="lineage-popup-title" style="cursor:move;padding:4px 8px;background:#223;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">` +
-    `<b style="color:#8cf;">chromosome #${id}</b>` +
+    `<b style="color:#8cf;">chromosome #${id} · gen ${n.gen | 0}</b>` +
     `<span style="color:#888;">${n.event}${n.mergedCount ? ` (+${n.mergedCount} merged)` : ''}</span>` +
     `<span style="flex:1;"></span>` +
     `<button class="lineage-popup-highlight" data-id="${id}" data-mode="copies" style="background:#234;color:#ddd;border:1px solid #468;padding:1px 6px;cursor:pointer;font-size:10px;">highlight copies</button>` +
@@ -5220,7 +5502,7 @@ function showLineagePopup(id, anchorX, anchorY) {
 
   const header =
     `<div style="padding:6px 8px;border-bottom:1px solid #333;">` +
-    `<div>shape ${n.shape} · len ${n.length} · hash ${hash}</div>` +
+    `<div>shape ${n.shape} · len ${n.length} · gen ${n.gen | 0} · hash ${hash}</div>` +
     `<div>born tick ${n.birthTick} (age ${age})${n.alive ? ` · ${n.copies} live ${n.copies === 1 ? 'copy' : 'copies'}` : ' · dead at ' + n.deathTick} · ${n.copiesEver || 1} total appearances</div>` +
     `<div>descendants ever: ${n.descendantsEver}</div>` +
     (n.parents.length ? `<div style="margin-top:4px;">parents:</div><pre style="margin:0;white-space:pre-wrap;">${parentRows}</pre>` : `<div>parents: (root)</div>`) +
@@ -5279,7 +5561,7 @@ function wireLineagePopupEvents() {
   if (diffBtn) diffBtn.addEventListener('click', () => {
     lineageDiffOpen = !lineageDiffOpen;
     // Force a width adjustment ONCE on toggle so the user sees the expand/collapse.
-    // Don't stomp user-resized widths during regular re-renders — we only run on click.
+    // Don't stomp user-resized widths during regular re-renders — only on click.
     const w = lineageDiffOpen
       ? Math.min(900, window.innerWidth - 60)
       : Math.min(520, window.innerWidth - 60);
@@ -5342,68 +5624,6 @@ function makeDraggable(el, handle) {
   window.addEventListener('mouseup', () => { dragging = false; });
 }
 
-// Diff-render: two hex rows (child, primary parent), byte-aligned, with
-// mismatches highlighted red. Reuses the PROTEIN_INFO tooltip hook.
-function renderDnaDiff(childData, parentData) {
-  const n = Math.max(childData.length, parentData.length);
-  let childRow = '', parentRow = '';
-  for (let i = 0; i < n; i++) {
-    const cb = i < childData.length ? childData[i] : null;
-    const pb = i < parentData.length ? parentData[i] : null;
-    const cHex = cb === null ? '··' : cb.toString(16).padStart(2, '0');
-    const pHex = pb === null ? '··' : pb.toString(16).padStart(2, '0');
-    const mismatch = cb !== null && pb !== null && cb !== pb;
-    const onlyInChild = cb !== null && pb === null;
-    const onlyInParent = cb === null && pb !== null;
-    const childColor = onlyInChild ? '#fa0' : (mismatch ? '#f66' : (cb === null ? '#444' : '#8c8'));
-    const parentColor = onlyInParent ? '#fa0' : (mismatch ? '#fa6' : (pb === null ? '#444' : '#88a'));
-    const cInfo = cb !== null ? getOpcodeInfo(cb) : { name: '—' };
-    const pInfo = pb !== null ? getOpcodeInfo(pb) : { name: '—' };
-    childRow += `<span class="dna-byte" style="color:${childColor};" data-tip="<span class='tip-title'>byte ${i} child 0x${cHex}</span>\n<span class='tip-desc'>${esc(cInfo.name)}</span>">${cHex}</span> `;
-    parentRow += `<span class="dna-byte" style="color:${parentColor};" data-tip="<span class='tip-title'>byte ${i} parent 0x${pHex}</span>\n<span class='tip-desc'>${esc(pInfo.name)}</span>">${pHex}</span> `;
-  }
-  const hexBlock = `<div style="margin-top:6px;font-size:10px;line-height:1.4;"><div style="color:#888;">child</div><div style="word-break:break-all;">${childRow}</div><div style="color:#888;margin-top:4px;">parent</div><div style="word-break:break-all;">${parentRow}</div></div>`;
-
-  // Decoded instruction diff: one row per aligned-by-offset instruction pair.
-  // If the two decoded streams don't share the same offset sequence (insertion
-  // / deletion / length mismatch), fall back to side-by-side blocks with no
-  // per-line alignment.
-  const cLines = decodeChromosome(childData);
-  const pLines = decodeChromosome(parentData);
-  const offsetsAlign = cLines.length === pLines.length
-    && cLines.every((ln, i) => ln.off === pLines[i].off);
-
-  const preStyle = 'font-size:10px;line-height:1.3;margin:2px 0;white-space:pre;color:#bbb;background:#0a0a0a;padding:4px;border:1px solid #222;border-radius:3px;overflow-x:auto;';
-  let codeBlock = `<div style="color:#8cf;font-size:10px;margin-top:8px;">Decoded diff</div>`;
-
-  if (offsetsAlign) {
-    let childCode = '', parentCode = '';
-    for (let i = 0; i < cLines.length; i++) {
-      const cl = cLines[i], pl = pLines[i];
-      const differ = cl.text !== pl.text;
-      if (differ) {
-        childCode += `<span style="color:#f66;">${esc(cl.text)}</span>\n`;
-        parentCode += `<span style="color:#fa6;">${esc(pl.text)}</span>\n`;
-      } else {
-        childCode += `<span style="color:${cl.color};">${esc(cl.text)}</span>\n`;
-        parentCode += `<span style="color:${pl.color};">${esc(pl.text)}</span>\n`;
-      }
-    }
-    codeBlock += `<div style="display:flex;gap:8px;">` +
-      `<div style="flex:1;min-width:0;"><div style="color:#888;font-size:10px;">child code</div><pre style="${preStyle}">${childCode}</pre></div>` +
-      `<div style="flex:1;min-width:0;"><div style="color:#888;font-size:10px;">parent code</div><pre style="${preStyle}">${parentCode}</pre></div>` +
-      `</div>`;
-  } else {
-    const renderLines = (lines) => lines.map(ln => `<span style="color:${ln.color};">${esc(ln.text)}</span>`).join('\n');
-    codeBlock += `<div style="color:#888;font-size:10px;">offsets diverge — rendered independently</div>` +
-      `<div style="display:flex;gap:8px;">` +
-      `<div style="flex:1;min-width:0;"><div style="color:#888;font-size:10px;">child code</div><pre style="${preStyle}">${renderLines(cLines)}</pre></div>` +
-      `<div style="flex:1;min-width:0;"><div style="color:#888;font-size:10px;">parent code</div><pre style="${preStyle}">${renderLines(pLines)}</pre></div>` +
-      `</div>`;
-  }
-
-  return hexBlock + codeBlock;
-}
 
 // ===== 20_ui.js =====
 // SPDX-License-Identifier: AGPL-3.0-or-later
@@ -5901,6 +6121,31 @@ async function loadWorldFromFile(file) {
   lineage.redirects = new Map(snap.lineage.redirects);
   lineage.chromToId = new WeakMap();
 
+  // Backfill `gen` for legacy saves (BFS from roots, gen = primary-parent's gen + 1).
+  if (lineage.nodes.size && [...lineage.nodes.values()].some(n => n.gen === undefined)) {
+    for (const n of lineage.nodes.values()) n.gen = -1;
+    const queue = [];
+    for (const [id, n] of lineage.nodes) {
+      if (!(n.primaryParentId > 0) || !lineage.nodes.has(n.primaryParentId)) {
+        n.gen = 0; queue.push(id);
+      }
+    }
+    while (queue.length) {
+      const pid = queue.shift();
+      const pn = lineage.nodes.get(pid); if (!pn) continue;
+      const kids = lineage.children.get(pid); if (!kids) continue;
+      for (const kid of kids) {
+        const kn = lineage.nodes.get(kid); if (!kn) continue;
+        if (kn.primaryParentId !== pid) continue;
+        if (kn.gen >= 0) continue;
+        kn.gen = (pn.gen | 0) + 1;
+        queue.push(kid);
+      }
+    }
+    // Any node still at -1 (cycle / detached primary chain) → fall back to 0.
+    for (const n of lineage.nodes.values()) if (n.gen < 0) n.gen = 0;
+  }
+
   // Re-register each chromosome with its carried lineage id.
   for (let ci = 0; ci < world.maxCells; ci++) {
     const g = world.genomes[ci];
@@ -5915,6 +6160,12 @@ async function loadWorldFromFile(file) {
     const lid = snap.world.freeChromosomes[i] && snap.world.freeChromosomes[i].data.lineageId;
     if (lid > 0) lineage.chromToId.set(world.freeChromosomes[i].data, lid);
   }
+
+  // Reconcile counters with actual buffers (saved snapshot can carry phantom
+  // alive nodes from pre-save drift), then run normal-policy prune once so
+  // newly-dead nodes from the rebuild start their grace clock from now.
+  lineageRebuildLiveness();
+  lineagePrune();
 
   // 6. Rebuild spatial grids. Clear buckets + per-item indices, then the
   // existing incremental rebuilders re-insert from current positions.
