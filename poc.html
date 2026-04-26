@@ -6388,8 +6388,7 @@ window.saveChromToLibrary = saveChromToLibrary;
 // first load so new users have a starting point without needing to import.
 const LIBRARY_PRESETS = {
   42: {
-    basic_survivor: 'fa 58 68 c0 7f 3d 00 3d 13 3d 00 3d 12 3d 3d 00 3d 13 3d 00 3d 12 c3 3d 00 3d 13 3d 00 3d 16 3d 0e 58 00 3d 15',
-    safe_replicator: '10 58 68 4a 00 41 52 44 53 46 56 58 00 22',
+    natural_survivor: '45 53 a8 14 43 16 13 b1 49 c0 35 7f b4 f4 03 5b 11 4f 33 25 e6 fb 84 f6',
   },
 };
 (function preloadLibraryDefaults() {
@@ -6604,7 +6603,54 @@ const PRESETABLE_KEYS = [
   'chromSpawnEnabled', 'legacyDivisionEnabled',
 ];
 
+// Built-in presets shipped with the app. Add new entries here as plain JSON —
+// they appear in the dropdown automatically alongside user-saved presets.
+// Built-ins are read-only: load works, delete and save-over are blocked so
+// the canonical values can't be lost. Unknown keys are ignored on apply, so
+// these objects can stay forward-compatible as CONFIG grows.
+//
+// DEFAULT_PRESET_NAME is auto-loaded onto CONFIG at module load (before
+// initWorld), and is the dropdown's default selection. Set to null to skip.
+const DEFAULT_PRESET_NAME = 'DEFAULT_PRESET';
+
+const BUILTIN_PRESETS = {
+  DEFAULT_PRESET: {
+    seed: 42,
+    initialCells: 145,
+    mutationRate: 0.0001,
+    energyCap: 500,
+    metabolismCost: 0.013274516778277816,
+    membraneDecayPerTick: 0.014368720197006307,
+    proteinDecayBase: 0.00004120975190973302,
+    freeProteinDecayRate: 0.0002,
+    makeProteinCost: 0.946237161365793,
+    lightSourceMoving: true,
+    lightSourceSpeed: 0.000079,
+    degradationStartAge: 700000,
+    degradationStartRate: 0.000001,
+    degradationIncreasePerEra: 0.3,
+    degradationMaxRate: 0.01,
+    membraneDivisionThreshold: 7,
+    replicaseTimeout: 228576,
+    replicaseBaseErrorRate: 0.023768402866248765,
+    replicaseProteinAdvanceChance: 1,
+    replicaseEnergyAdvanceEnabled: true,
+    replicaseEnergyAdvanceChance: 0.0001,
+    replicaseEnergyAdvanceCost: 10,
+    expelRate: 0.02,
+    intakeRate: 0.02,
+    freeChromDegradeTicks: 2000,
+    chromSpawnInterval: 50000,
+    chromSpawnEnabled: false,
+    legacyDivisionEnabled: false,
+  },
+};
+
 const PRESETS_STORAGE_KEY = 'evoNetPresets';
+
+function isBuiltinPreset(name) {
+  return Object.prototype.hasOwnProperty.call(BUILTIN_PRESETS, name);
+}
 
 function collectPreset() {
   const out = {};
@@ -6633,19 +6679,39 @@ function _writePresetStore(obj) {
   localStorage.setItem(PRESETS_STORAGE_KEY, JSON.stringify(obj));
 }
 
+function listBuiltinPresets() {
+  return Object.keys(BUILTIN_PRESETS).sort();
+}
+
+function listUserPresets() {
+  return Object.keys(_readPresetStore()).sort();
+}
+
 function listPresets() {
-  const store = _readPresetStore();
-  return Object.keys(store).sort();
+  // Builtins first, user-saved second; user names that shadow builtins are kept
+  // in both lists so the dropdown can render them under their respective groups.
+  return [...listBuiltinPresets(), ...listUserPresets()];
 }
 
 function savePreset(name) {
   if (!name) return;
+  if (isBuiltinPreset(name)) {
+    alert(`"${name}" is a built-in preset and can't be overwritten. Pick a different name.`);
+    return;
+  }
   const store = _readPresetStore();
   store[name] = { ...collectPreset(), savedAt: Date.now() };
   _writePresetStore(store);
 }
 
 function loadPreset(name) {
+  // Built-ins win over user-saved with the same name, so the canonical defaults
+  // remain reachable even if a user accidentally created a same-named entry
+  // before the builtin existed.
+  if (isBuiltinPreset(name)) {
+    applyPreset(BUILTIN_PRESETS[name]);
+    return;
+  }
   const store = _readPresetStore();
   const entry = store[name];
   if (!entry) return;
@@ -6653,6 +6719,10 @@ function loadPreset(name) {
 }
 
 function deletePreset(name) {
+  if (isBuiltinPreset(name)) {
+    alert(`"${name}" is a built-in preset and can't be deleted.`);
+    return;
+  }
   const store = _readPresetStore();
   delete store[name];
   _writePresetStore(store);
@@ -6663,20 +6733,57 @@ function refreshPresetDropdown() {
   if (!sel) return;
   const prev = sel.value;
   sel.innerHTML = '';
-  const names = listPresets();
-  if (names.length === 0) {
+
+  const builtins = listBuiltinPresets();
+  const user = listUserPresets();
+
+  if (builtins.length === 0 && user.length === 0) {
     const opt = document.createElement('option');
     opt.value = ''; opt.textContent = '(no presets saved)';
     sel.appendChild(opt);
     return;
   }
-  for (const n of names) {
-    const opt = document.createElement('option');
-    opt.value = n; opt.textContent = n;
-    sel.appendChild(opt);
+
+  if (builtins.length > 0) {
+    const grp = document.createElement('optgroup');
+    grp.label = 'Built-in';
+    for (const n of builtins) {
+      const opt = document.createElement('option');
+      opt.value = n; opt.textContent = n;
+      grp.appendChild(opt);
+    }
+    sel.appendChild(grp);
   }
-  if (names.indexOf(prev) >= 0) sel.value = prev;
+
+  if (user.length > 0) {
+    const grp = document.createElement('optgroup');
+    grp.label = 'Saved';
+    for (const n of user) {
+      const opt = document.createElement('option');
+      opt.value = n; opt.textContent = n;
+      grp.appendChild(opt);
+    }
+    sel.appendChild(grp);
+  }
+
+  // Restore previous selection if it still exists; otherwise prefer the
+  // configured default builtin, then fall back to the first available.
+  const all = [...builtins, ...user];
+  if (all.indexOf(prev) >= 0) sel.value = prev;
+  else if (DEFAULT_PRESET_NAME && all.indexOf(DEFAULT_PRESET_NAME) >= 0) sel.value = DEFAULT_PRESET_NAME;
+  else sel.value = all[0];
 }
+
+// Auto-load the configured default preset onto CONFIG at module load. Runs
+// before initWorld() (24_main_loop.js) so the world is built with the preset's
+// values. applyPreset's syncUiFromConfig hop is guarded by a typeof check, so
+// it's safely a no-op while the UI helper hasn't been defined yet.
+function autoLoadDefaultPreset() {
+  if (!DEFAULT_PRESET_NAME) return;
+  const def = BUILTIN_PRESETS[DEFAULT_PRESET_NAME];
+  if (def) applyPreset(def);
+}
+autoLoadDefaultPreset();
 
 // ===== 24_main_loop.js =====
 // ============================================================

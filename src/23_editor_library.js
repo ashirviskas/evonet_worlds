@@ -166,8 +166,7 @@ window.saveChromToLibrary = saveChromToLibrary;
 // first load so new users have a starting point without needing to import.
 const LIBRARY_PRESETS = {
   42: {
-    basic_survivor: 'fa 58 68 c0 7f 3d 00 3d 13 3d 00 3d 12 3d 3d 00 3d 13 3d 00 3d 12 c3 3d 00 3d 13 3d 00 3d 16 3d 0e 58 00 3d 15',
-    safe_replicator: '10 58 68 4a 00 41 52 44 53 46 56 58 00 22',
+    natural_survivor: '45 53 a8 14 43 16 13 b1 49 c0 35 7f b4 f4 03 5b 11 4f 33 25 e6 fb 84 f6',
   },
 };
 (function preloadLibraryDefaults() {
