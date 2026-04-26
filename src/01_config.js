@@ -82,7 +82,9 @@ const CONFIG = {
   chromSpawnInterval: 50000,           // ticks between spawns of a random chromosome (primordial soup)
   chromSpawnEnabled: true,             // master switch for the primordial spawner (UI checkbox)
   chromSpawnMinLen: 8,               // min length of soup-spawned chromosomes
-  chromSpawnMaxLen: 64,              // max length of soup-spawned chromosomes
+  chromSpawnMaxLen: 32,              // max length of soup-spawned chromosomes
+  cellSpawnMinLen: 8,                // min length of the initial chromosome inside a freshly spawned cell
+  cellSpawnMaxLen: 32,               // max length of the initial chromosome inside a freshly spawned cell
 
   // --- Chromosome ejection/absorption ---
   chromEjectThreshold: 5,            // Chromosome Ejector (type 20) count in cytoplasm needed to eject one chromosome

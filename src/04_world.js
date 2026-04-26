@@ -247,7 +247,7 @@ function spawnCell(x, y, parentId, generation) {
   world.membraneHP[idx] = CONFIG.membraneMaxHP;
   world.age[idx] = 0; world.parentId[idx] = parentId; world.generation[idx] = generation;
 
-  const len = 32 + world.rng.nextInt(96);
+  const len = CONFIG.cellSpawnMinLen + world.rng.nextInt(CONFIG.cellSpawnMaxLen - CONFIG.cellSpawnMinLen + 1);
   const chrom = new Uint8Array(len);
   for (let i = 0; i < len; i++) chrom[i] = world.rng.nextInt(256);
   world.genomes[idx] = [chrom];
