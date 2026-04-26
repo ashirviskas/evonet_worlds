@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Matas Minelga
 // ============================================================
 // LINEAGE PANEL — left-side interactive tree of the DNA lineage DAG.
 //

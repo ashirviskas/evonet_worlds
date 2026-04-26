@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Matas Minelga
 // ============================================================
 // DIRECTIONAL SENSORS (types 39, 40, 41)
 // ============================================================

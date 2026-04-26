@@ -88,3 +88,17 @@ Caveat: instrumentation wraps ~20 phase functions, which adds ~200 ns per call �
 ### For Agents
 
 **When analyzing evo_net performance, or making any change to the tick path, run the benchmark before and after and report both numbers.** The per-phase breakdown matters more than wall time — a change that shifts time between phases is still worth knowing. Always run the full canonical sweep above (pop200/500/2000 at 5k ticks, seeded at 50k ticks, 1k warmup throughout) and drop results into `bench/results/<change_name>/`; compare against `bench/results/latest_*.txt`. Numbers without scaling context don't prove much, because the top phases shift with population. The seeded reproducer is a pop-growth run — 50k ticks covers the full early-growth curve through steady state. Commit the results directory with the change.
+
+## License
+
+Copyright &copy; 2026 Matas Minelga.
+
+Evonet Worlds is free software, licensed under the **GNU Affero General Public License, version 3 or later** (AGPL-3.0-or-later). See [`LICENSE`](LICENSE) for the full text, or <https://www.gnu.org/licenses/agpl-3.0.html>.
+
+The AGPL is a strong copyleft license. In short:
+
+- You may use, study, modify, and distribute the code freely.
+- If you distribute it (modified or not), recipients must get the same freedoms and access to the corresponding source.
+- **If you run a modified version as a network service** (web app, multiplayer host, hosted simulator, etc.), you must offer users of that service the source for your modified version. The in-app "Source" link in the panel UI satisfies §13 for the upstream build; downstream forks must keep an equivalent prominent notice pointing at *their* source.
+
+There is **no warranty**, to the extent permitted by law.

@@ -1,4 +1,25 @@
 <!DOCTYPE html>
+<!--
+  SPDX-License-Identifier: AGPL-3.0-or-later
+  Copyright (C) 2026 Matas Minelga
+
+  Evonet Worlds — evolution simulation.
+
+  This program is free software: you can redistribute it and/or modify
+  it under the terms of the GNU Affero General Public License as published by
+  the Free Software Foundation, either version 3 of the License, or
+  (at your option) any later version.
+
+  This program is distributed in the hope that it will be useful,
+  but WITHOUT ANY WARRANTY; without even the implied warranty of
+  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+  GNU Affero General Public License for more details.
+
+  You should have received a copy of the GNU Affero General Public License
+  along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+  Source: https://github.com/ashirviskas/evonet_worlds
+-->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -256,6 +277,12 @@ canvas { display: block; width: 100%; height: 100%; }
     </div>
   </div>
 
+  <!-- AGPL §13: prominent source/license notice for users interacting over a network -->
+  <div style="font-size:10px; color:#888; border-top:1px solid #333; padding-top:8px; line-height:1.5;">
+    Evonet Worlds &copy; 2026 Matas Minelga &middot;
+    <a href="https://github.com/ashirviskas/evonet_worlds" target="_blank" rel="noopener" style="color:#8cf;">Source</a> &middot;
+    <a href="https://www.gnu.org/licenses/agpl-3.0.html" target="_blank" rel="noopener" style="color:#8cf;">AGPL-3.0</a>
+  </div>
 </div>
 <div id="protein-legend"></div>
 <div id="tooltip"></div>
@@ -301,6 +328,8 @@ canvas { display: block; width: 100%; height: 100%; }
 
 <script>
 // ===== 00_tooltip.js =====
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Matas Minelga
 // ============================================================
 // CUSTOM TOOLTIP
 // ============================================================
@@ -333,6 +362,8 @@ function positionTooltip(e, tip) {
 }
 
 // ===== 01_config.js =====
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Matas Minelga
 // ============================================================
 // CONFIG
 // ============================================================
@@ -468,6 +499,8 @@ const CONFIG = {
 };
 
 // ===== 02_protein_info.js =====
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Matas Minelga
 // ============================================================
 // PROTEIN INFO CATALOG
 // ============================================================
@@ -634,6 +667,8 @@ const PROTEIN_HSL = PROTEIN_INFO.map(info => {
 });
 
 // ===== 03_rng.js =====
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Matas Minelga
 // ============================================================
 // RNG
 // ============================================================
@@ -656,6 +691,8 @@ function makeRNG(seed) {
 }
 
 // ===== 04_world.js =====
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Matas Minelga
 // ============================================================
 // WORLD STATE (SoA)
 // ============================================================
@@ -939,6 +976,8 @@ function spawnCell(x, y, parentId, generation) {
 }
 
 // ===== 05_spatial_grid.js =====
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Matas Minelga
 // ============================================================
 // SPATIAL GRID (incremental)
 // ============================================================
@@ -1003,6 +1042,8 @@ function getNeighborCells(cellIdx) {
 }
 
 // ===== 06_slot_helpers.js =====
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Matas Minelga
 // ============================================================
 // SLOT/SUBSLOT HELPERS
 // ============================================================
@@ -1246,6 +1287,8 @@ function cellEnergyStorageTick(cellIdx) {
 }
 
 // ===== 07_tick.js =====
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Matas Minelga
 // ============================================================
 // SIMULATION TICK
 // ============================================================
@@ -1357,6 +1400,8 @@ function tick() {
 }
 
 // ===== 08_collision.js =====
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Matas Minelga
 // ============================================================
 // COLLISION PHYSICS & DAMAGE
 // ============================================================
@@ -1418,6 +1463,8 @@ function applyCollisionDamage(attackerIdx, defenderIdx, angle) {
 }
 
 // ===== 09_movement.js =====
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Matas Minelga
 // ============================================================
 // MOVEMENT
 // ============================================================
@@ -1494,6 +1541,8 @@ function motorTick(cellIdx) {
 }
 
 // ===== 09b_directional_sensors.js =====
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Matas Minelga
 // ============================================================
 // DIRECTIONAL SENSORS (types 39, 40, 41)
 // ============================================================
@@ -1688,6 +1737,8 @@ function emitSensorOutput(cellIdx, slotIdx, subslotK) {
 }
 
 // ===== 10_photons.js =====
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Matas Minelga
 // ============================================================
 // PHOTONS
 // ============================================================
@@ -1886,6 +1937,8 @@ function spawnPhotonAt(x, y, energy) {
 }
 
 // ===== 11_ribosome.js =====
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Matas Minelga
 // ============================================================
 // RIBOSOME
 // ============================================================
@@ -2011,6 +2064,8 @@ function chromosomeShape(chrom) {
 }
 
 // ===== 12_decay_migration_energy.js =====
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Matas Minelga
 // ============================================================
 // PROTEIN DECAY, MIGRATION, DNA DEGRADATION, ENERGY
 // ============================================================
@@ -2326,6 +2381,8 @@ function divideCell(parentIdx) {
 }
 
 // ===== 13_free_proteins.js =====
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Matas Minelga
 // ============================================================
 // FREE PROTEINS IN MEDIUM (dense live-index list)
 // ============================================================
@@ -2427,6 +2484,8 @@ function freeProteinTick() {
 }
 
 // ===== 14_free_chromosomes.js =====
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Matas Minelga
 // ============================================================
 // TASK 002 — FREE CHROMOSOMES IN MEDIUM
 // ============================================================
@@ -2500,6 +2559,8 @@ function freeChromosomeTick() {
 }
 
 // ===== 14b_lineage.js =====
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Matas Minelga
 // ============================================================
 // LINEAGE — DNA-level family tree.
 //
@@ -3150,6 +3211,8 @@ function lineageAssertInvariants() {
 }
 
 // ===== 15_pump.js =====
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Matas Minelga
 // ============================================================
 // TASK 002 — PUMP TICK (EXPEL/INTAKE)
 // ============================================================
@@ -3216,6 +3279,8 @@ function pumpTick(cellIdx) {
 }
 
 // ===== 16_chrom_eject_absorb.js =====
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Matas Minelga
 // ============================================================
 // TASK 002 — CHROMOSOME EJECTION & ABSORPTION
 // ============================================================
@@ -3279,6 +3344,8 @@ function chromAbsorbAll() {
 }
 
 // ===== 16b_chromase.js =====
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Matas Minelga
 // ============================================================
 // CHROMASE — DNA digestion.
 //
@@ -3412,6 +3479,8 @@ function chromaseExternalTick() {
 }
 
 // ===== 17_replicase.js =====
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Matas Minelga
 // ============================================================
 // REPLICASE — concurrent chromosome duplication via a global job pool.
 //
@@ -3877,6 +3946,8 @@ function replicaseTick() {
 }
 
 // ===== 18_membrane_division.js =====
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Matas Minelga
 // ============================================================
 // TASK 002 — MEMBRANE-DRIVEN DIVISION
 // ============================================================
@@ -4063,6 +4134,8 @@ function distributeChromosomes(parentIdx, childIdx, genome) {
 }
 
 // ===== 19_rendering.js =====
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Matas Minelga
 // ============================================================
 // RENDERING
 // ============================================================
@@ -4551,6 +4624,8 @@ function render() {
 }
 
 // ===== 19b_lineage_render.js =====
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Matas Minelga
 // ============================================================
 // LINEAGE PANEL — left-side interactive tree of the DNA lineage DAG.
 //
@@ -5331,6 +5406,8 @@ function renderDnaDiff(childData, parentData) {
 }
 
 // ===== 20_ui.js =====
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Matas Minelga
 // ============================================================
 // UI
 // ============================================================
@@ -5632,6 +5709,8 @@ function buildProteinLegend() {
 }
 
 // ===== 20b_save_load.js =====
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Matas Minelga
 // ============================================================
 // SAVE / LOAD WORLD
 // ============================================================
@@ -5867,6 +5946,8 @@ async function loadWorldFromFile(file) {
 }
 
 // ===== 21_interaction.js =====
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Matas Minelga
 // ============================================================
 // INTERACTION
 // ============================================================
@@ -5983,6 +6064,8 @@ canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 canvas.addEventListener('wheel', (e) => { e.preventDefault(); camera.zoom *= e.deltaY > 0 ? 0.9 : 1.1; camera.zoom = Math.max(0.2, Math.min(5, camera.zoom)); });
 
 // ===== 22_controls.js =====
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Matas Minelga
 // ============================================================
 // CONTROLS
 // ============================================================
@@ -6220,6 +6303,8 @@ document.getElementById('preset-paste-json').addEventListener('click', () => {
 });
 
 // ===== 23_editor_library.js =====
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Matas Minelga
 // ============================================================
 // CHROMOSOME EDITOR + LIBRARY + CLIPBOARD
 // ============================================================
@@ -6585,6 +6670,8 @@ document.getElementById('btn-free-from-clip').addEventListener('click', async ()
 });
 
 // ===== 23b_presets.js =====
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Matas Minelga
 // ============================================================
 // SETTINGS PRESETS — save/load CONFIG tunables
 // ============================================================
@@ -6786,6 +6873,8 @@ function autoLoadDefaultPreset() {
 autoLoadDefaultPreset();
 
 // ===== 24_main_loop.js =====
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Matas Minelga
 // ============================================================
 // MAIN LOOP
 // ============================================================

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Matas Minelga
 """Assemble poc.html from poc.template.html + src/*.js.
 
 Run: python3 build.py   (from topics/evo_net/)
