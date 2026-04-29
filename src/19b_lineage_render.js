@@ -19,8 +19,8 @@ const lineageEdgeTooltip = document.getElementById('lineage-edge-tooltip');
 const lineageView = {
   offsetX: 0, offsetY: 0,
   zoom: 1,
-  selectedId: -1,
-  hoverId: -1,
+  selectedId: null,
+  hoverId: null,
   hoverEdge: null,        // {childId, parentIndex, frac, bytes, parentLen}
   pinnedAutoFit: true,
   panning: false,
@@ -85,7 +85,7 @@ function clearLineageHighlight() { lineageHighlight.ids = new Set(); }
 // Focus the lineage panel on a specific lineage id. Resets the copiesEver
 // filter if the target is hidden, centers the view, then opens the popup.
 function jumpToLineage(id) {
-  if (!(id > 0) || !lineage.nodes.has(id)) return;
+  if (!id || !lineage.nodes.has(id)) return;
   const n = lineage.nodes.get(id);
   if ((n.copiesEver || 1) < lineageView.minCopiesEver) {
     lineageView.minCopiesEver = 1;
@@ -134,8 +134,8 @@ function attachLineageFilter() {
     compactBtn.textContent = `compact tree (-${before - after})`;
     setTimeout(() => { if (compactBtn.isConnected) compactBtn.textContent = 'compact tree'; }, 1500);
     // If the popup was showing a node we just dropped, close it.
-    if (lineageView.selectedId > 0 && !lineage.nodes.has(lineageView.selectedId)) {
-      lineageView.selectedId = -1;
+    if (lineageView.selectedId && !lineage.nodes.has(lineageView.selectedId)) {
+      lineageView.selectedId = null;
       hideLineagePopup();
     }
   });
@@ -165,12 +165,6 @@ function edgeColorForEvent(event, isMain) {
     case 'degrade-checkpoint': return isMain ? 'rgba(210,110,80,0.8)'  : 'rgba(180,90,60,0.35)';
     case 'digest-checkpoint':  return isMain ? 'rgba(220,100,150,0.8)' : 'rgba(180,80,120,0.35)';
     case 'clone':              return isMain ? 'rgba(200,200,200,0.8)' : 'rgba(170,170,170,0.35)';
-    // Cross-tab portal events (see 23e_portal_lineage.js for lifecycle).
-    case 'portal-out':         return isMain ? 'rgba(255,140,60,0.85)' : 'rgba(220,110,40,0.35)';   // donor leaf — orange
-    case 'portal-in':          return isMain ? 'rgba(80,200,200,0.85)' : 'rgba(60,160,160,0.35)';   // arrived w/ ancestry — teal
-    case 'portal-in-pending':  return isMain ? 'rgba(220,200,80,0.85)' : 'rgba(180,160,60,0.35)';   // awaiting fill — yellow
-    case 'portal-in-orphan':   return isMain ? 'rgba(180,90,90,0.85)'  : 'rgba(140,60,60,0.35)';    // donor closed — dim red
-    case 'portal-revisit':     return isMain ? 'rgba(190,130,230,0.85)': 'rgba(150,100,190,0.35)';  // round-trip — purple
     case 'replicase':
     default:                   return isMain ? 'rgba(120,200,255,0.8)' : 'rgba(120,200,255,0.3)';
   }
@@ -185,21 +179,21 @@ function rebuildLineageLayout() {
     const n = lineage.nodes.get(id);
     return !!n && (n.copiesEver || 1) >= minCE;
   };
-  // Walk up primaryParentId until we hit a visible ancestor; returns -1 if none.
+  // Walk up primaryParentId until we hit a visible ancestor; returns null if none.
   const effectiveParent = (n) => {
     let pid = n.primaryParentId;
     const seen = new Set();
-    while (pid > 0 && lineage.nodes.has(pid) && !seen.has(pid)) {
+    while (pid && lineage.nodes.has(pid) && !seen.has(pid)) {
       if (visible(pid)) return pid;
       seen.add(pid);
       pid = lineage.nodes.get(pid).primaryParentId;
     }
-    return -1;
+    return null;
   };
   for (const [id, n] of lineage.nodes) {
     if (!visible(id)) continue;
     const pid = effectiveParent(n);
-    if (pid < 0) { roots.push(id); continue; }
+    if (!pid) { roots.push(id); continue; }
     let arr = childrenByPrimary.get(pid);
     if (!arr) { arr = []; childrenByPrimary.set(pid, arr); }
     arr.push(id);
@@ -400,7 +394,7 @@ function renderLineage() {
 // ---------- Hit-testing ----------
 function lineageHitTestNode(sx, sy) {
   if (lineageLayout.version !== lineage.structVersion || lineageLayout.filterThreshold !== lineageView.minCopiesEver) rebuildLineageLayout();
-  let bestId = -1, bestD2 = Infinity;
+  let bestId = null, bestD2 = Infinity;
   for (const [id, pos] of lineageLayout.positions) {
     const n = lineage.nodes.get(id);
     if (!n) continue;
@@ -484,11 +478,11 @@ function attachLineageInteractions() {
       return;
     }
 
-    if (!inside) { hideLineageEdgeTooltip(); lineageView.hoverId = -1; return; }
+    if (!inside) { hideLineageEdgeTooltip(); lineageView.hoverId = null; return; }
 
     const nodeId = lineageHitTestNode(mx, my);
     lineageView.hoverId = nodeId;
-    if (nodeId > 0) {
+    if (nodeId) {
       lineageCanvas.style.cursor = 'pointer';
       hideLineageEdgeTooltip();
       return;
@@ -513,7 +507,7 @@ function attachLineageInteractions() {
     const inside = mx >= 0 && my >= 0 && mx < lineageCanvas.width && my < lineageCanvas.height;
     if (moved < 4 && inside) {
       const id = lineageHitTestNode(mx, my);
-      if (id > 0) { lineageView.selectedId = id; showLineagePopup(id, mx, my); }
+      if (id) { lineageView.selectedId = id; showLineagePopup(id, mx, my); }
       // Don't auto-close the popup on stray empty click — user can X/Esc.
     }
   });
@@ -523,7 +517,7 @@ function attachLineageInteractions() {
       const active = document.activeElement;
       const tag = active && active.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA') return;
-      lineageView.selectedId = -1;
+      lineageView.selectedId = null;
       hideLineagePopup();
     }
   });
@@ -538,7 +532,7 @@ function showLineageEdgeTooltip(edge, clientX, clientY) {
   const bytes = child.parentBytes ? (child.parentBytes[edge.parentIndex] || 0) : parent.length;
   const pct = parent.length > 0 ? (bytes / parent.length * 100).toFixed(1) : '—';
   lineageEdgeTooltip.innerHTML =
-    `<b>#${parent.id} → #${child.id}</b><br>` +
+    `<b>#${lineageShortId(parent.id)} → #${lineageShortId(child.id)}</b><br>` +
     `bytes read: ${bytes} / ${parent.length} = ${pct}%<br>` +
     `child event: ${child.event}${edge.isMain ? '' : ' (secondary parent)'}<br>` +
     (child.parents.length > 1 ? `child has ${child.parents.length} parents` : '');
@@ -554,7 +548,7 @@ function showLineagePopup(id, anchorX, anchorY) {
   const n = lineage.nodes.get(id);
   if (!n) { hideLineagePopup(); return; }
 
-  const primary = n.primaryParentId > 0 ? lineage.nodes.get(n.primaryParentId) : null;
+  const primary = n.primaryParentId ? lineage.nodes.get(n.primaryParentId) : null;
   const hash = '0x' + n.hashPrefix.toString(16).padStart(8, '0');
   const age = world.tick - n.birthTick;
 
@@ -565,7 +559,7 @@ function showLineagePopup(id, anchorX, anchorY) {
     const bytes = n.parentBytes ? (n.parentBytes[i] || 0) : len;
     const pct = len > 0 ? (bytes / len * 100).toFixed(1) : '—';
     const isPrimary = pid === n.primaryParentId;
-    return `  <span style="color:#bbb;">${isPrimary ? '★' : ' '} <a href="#" class="lineage-parent-link" data-pid="${pid}" style="color:#8cf;">#${pid}</a> — ${bytes}/${len} = ${pct}%</span>`;
+    return `  <span style="color:#bbb;">${isPrimary ? '★' : ' '} <a href="#" class="lineage-parent-link" data-pid="${pid}" style="color:#8cf;">#${lineageShortId(pid)}</a> — ${bytes}/${len} = ${pct}%</span>`;
   }).join('\n');
 
   // Single decoded view. When diff is on AND a primary parent exists, the view
@@ -576,10 +570,10 @@ function showLineagePopup(id, anchorX, anchorY) {
   let dnaHtml = '';
   if (n.data) {
     if (showDiff) {
-      dnaHtml += `<div style="margin-bottom:6px;color:#888;">diff vs primary parent <a href="#" class="lineage-parent-link" data-pid="${primary.id}" style="color:#8cf;">#${primary.id}</a></div>`;
+      dnaHtml += `<div style="margin-bottom:6px;color:#888;">diff vs primary parent <a href="#" class="lineage-parent-link" data-pid="${primary.id}" style="color:#8cf;">#${lineageShortId(primary.id)}</a></div>`;
       dnaHtml += renderDnaWithDiff(n.data, primary.data);
     } else {
-      dnaHtml += renderDnaFull(n.data, `chromosome #${id}`, -1);
+      dnaHtml += renderDnaFull(n.data, `chromosome #${lineageShortId(id)}`, -1);
     }
   }
 
@@ -594,7 +588,7 @@ function showLineagePopup(id, anchorX, anchorY) {
     `style="background:${diffDisabled ? '#222' : '#234'};color:${diffDisabled ? '#555' : '#ddd'};border:1px solid ${diffDisabled ? '#333' : '#468'};padding:1px 6px;cursor:${diffDisabled ? 'default' : 'pointer'};font-size:10px;">${diffLabel}</button>`;
   const titleBar =
     `<div class="lineage-popup-title" style="cursor:move;padding:4px 8px;background:#223;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">` +
-    `<b style="color:#8cf;">chromosome #${id} · gen ${n.gen | 0}</b>` +
+    `<b style="color:#8cf;" title="${id}">chromosome #${lineageShortId(id)} · gen ${n.gen | 0}</b>` +
     `<span style="color:#888;">${n.event}${n.mergedCount ? ` (+${n.mergedCount} merged)` : ''}</span>` +
     `<span style="flex:1;"></span>` +
     `<button class="lineage-popup-highlight" data-id="${id}" data-mode="copies" style="background:#234;color:#ddd;border:1px solid #468;padding:1px 6px;cursor:pointer;font-size:10px;">highlight copies</button>` +
@@ -605,10 +599,17 @@ function showLineagePopup(id, anchorX, anchorY) {
     `<button class="lineage-popup-close" style="background:#333;color:#ddd;border:1px solid #555;padding:1px 6px;cursor:pointer;font-size:10px;">✕</button>` +
     `</div>`;
 
+  const birthWorld = (n.birth && n.birth.worldUuid) ? n.birth.worldUuid : null;
+  const isLocalBirth = birthWorld && world.uuid && birthWorld === world.uuid;
+  const birthLine = birthWorld
+    ? `<div>born world ${isLocalBirth ? 'here' : `<span style="color:#fc8;">${birthWorld.slice(0, 8)}</span>`} · tick ${(n.birth && n.birth.tick != null) ? n.birth.tick : n.birthTick}</div>`
+    : `<div>born tick ${n.birthTick}</div>`;
+
   const header =
     `<div style="padding:6px 8px;border-bottom:1px solid #333;">` +
     `<div>shape ${n.shape} · len ${n.length} · gen ${n.gen | 0} · hash ${hash}</div>` +
-    `<div>born tick ${n.birthTick} (age ${age})${n.alive ? ` · ${n.copies} live ${n.copies === 1 ? 'copy' : 'copies'}` : ' · dead at ' + n.deathTick} · ${n.copiesEver || 1} total appearances</div>` +
+    birthLine +
+    `<div>age ${age}${n.alive ? ` · ${n.copies} live ${n.copies === 1 ? 'copy' : 'copies'}` : ' · dead at ' + n.deathTick} · ${n.copiesEver || 1} total appearances</div>` +
     `<div>descendants ever: ${n.descendantsEver}</div>` +
     (n.parents.length ? `<div style="margin-top:4px;">parents:</div><pre style="margin:0;white-space:pre-wrap;">${parentRows}</pre>` : `<div>parents: (root)</div>`) +
     `</div>`;
@@ -638,7 +639,7 @@ function hideLineagePopup() {
 
 function wireLineagePopupEvents() {
   const close = lineagePopup.querySelector('.lineage-popup-close');
-  if (close) close.addEventListener('click', () => { lineageView.selectedId = -1; hideLineagePopup(); });
+  if (close) close.addEventListener('click', () => { lineageView.selectedId = null; hideLineagePopup(); });
   // Reopens the popup at its current on-screen position (so toggling highlight
   // buttons doesn't yank the popup back to the clicked node). anchorX/Y are
   // relative to the lineage panel rect — see the positioning block in showLineagePopup.
@@ -654,34 +655,32 @@ function wireLineagePopupEvents() {
   };
   for (const btn of lineagePopup.querySelectorAll('.lineage-popup-highlight')) {
     btn.addEventListener('click', () => {
-      const id = +btn.dataset.id;
+      const id = btn.dataset.id;
       const mode = btn.dataset.mode;
-      if (!(id > 0)) return;
+      if (!id) return;
       if (mode === 'desc') setLineageHighlight(collectLineageDescendants(id));
       else setLineageHighlight(new Set([id]));
-      refreshInPlace(id); // re-render so the "clear hl" button appears
+      refreshInPlace(id);
     });
   }
   const diffBtn = lineagePopup.querySelector('.lineage-popup-difftoggle:not([disabled])');
   if (diffBtn) diffBtn.addEventListener('click', () => {
     lineageDiffOpen = !lineageDiffOpen;
-    // Force a width adjustment ONCE on toggle so the user sees the expand/collapse.
-    // Don't stomp user-resized widths during regular re-renders — only on click.
     const w = lineageDiffOpen
       ? Math.min(900, window.innerWidth - 60)
       : Math.min(520, window.innerWidth - 60);
     lineagePopup.style.width = w + 'px';
-    refreshInPlace(+diffBtn.dataset.id);
+    refreshInPlace(diffBtn.dataset.id);
   });
   const clearHl = lineagePopup.querySelector('.lineage-popup-highlight-clear');
   if (clearHl) clearHl.addEventListener('click', () => {
     clearLineageHighlight();
     const id = lineageView.selectedId;
-    if (id > 0) refreshInPlace(id);
+    if (id) refreshInPlace(id);
   });
   const copy = lineagePopup.querySelector('.lineage-popup-copy');
   if (copy) copy.addEventListener('click', () => {
-    const id = +copy.dataset.id;
+    const id = copy.dataset.id;
     const n = lineage.nodes.get(id);
     if (!n || !n.data) return;
     const hex = Array.from(n.data).map(b => b.toString(16).padStart(2, '0')).join(' ');
@@ -694,7 +693,7 @@ function wireLineagePopupEvents() {
   for (const a of lineagePopup.querySelectorAll('.lineage-parent-link')) {
     a.addEventListener('click', (e) => {
       e.preventDefault();
-      const pid = +a.dataset.pid;
+      const pid = a.dataset.pid;
       if (lineage.nodes.has(pid)) {
         lineageView.selectedId = pid;
         const pos = lineageLayout.positions.get(pid);

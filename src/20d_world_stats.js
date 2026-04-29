@@ -24,7 +24,7 @@
       const seenInCell = new Set();
       for (let c = 0; c < g.length; c++) {
         const lid = getLineageId(g[c]);
-        if (lid <= 0 || seenInCell.has(lid)) continue;
+        if (!lid || seenInCell.has(lid)) continue;
         seenInCell.add(lid);
         counts.set(lid, (counts.get(lid) || 0) + 1);
       }
@@ -169,7 +169,9 @@
   }
 
   function _lidColor(lid) {
-    return `hsl(${(lid * 47) % 360}, 65%, 55%)`;
+    // Derive a stable hue from the chromosome UUID's first 6 hex chars.
+    const hue = lid ? (parseInt(lid.slice(0, 6), 16) % 360) : 0;
+    return `hsl(${hue}, 65%, 55%)`;
   }
 
   function _selectTopLineages(samples, k) {
@@ -257,7 +259,7 @@
     const parts = topLids.map(lid =>
       `<span style="display:inline-flex; align-items:center; gap:3px;">` +
       `<span style="width:9px; height:9px; background:${_lidColor(lid)}; border-radius:1px;"></span>` +
-      `<span style="color:#bbb;">lid:${lid}</span>` +
+      `<span style="color:#bbb;">${lineageShortId(lid)}</span>` +
       `</span>`
     );
     parts.push(

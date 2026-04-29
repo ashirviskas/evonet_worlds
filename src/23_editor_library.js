@@ -312,8 +312,8 @@ function inspectActionDelegate(e) {
       const g = world.genomes[cellIdx];
       if (g) chrom = g[chromIdx];
     }
-    const lid = chrom ? getLineageId(chrom) : -1;
-    if (lid > 0) jumpToLineage(lid);
+    const lid = chrom ? getLineageId(chrom) : null;
+    if (lid) jumpToLineage(lid);
   } else if (action === 'kill') {
     if (cellIdx >= 0 && world.alive[cellIdx]) {
       killCell(cellIdx);

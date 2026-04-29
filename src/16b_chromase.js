@@ -48,7 +48,7 @@ function chromaseInternalTick(cellIdx) {
     if (genome.length === 0) break;
     const ci = world.rng.nextInt(genome.length);
     const chrom = genome[ci];
-    if (chrom.length === 0) { genome.splice(ci, 1); continue; }
+    if (chrom.length === 0) { lineageMarkDead(chrom, 'cell'); genome.splice(ci, 1); continue; }
 
     const pos = world.rng.nextInt(chrom.length);
     const shrunk = chromShrinkByte(chrom, pos);
@@ -62,7 +62,7 @@ function chromaseInternalTick(cellIdx) {
     erosion.delete(chrom);
     erosion.set(shrunk, eroded);
 
-    if (prevId > 0 && eroded >= CONFIG.lineageDegradeCheckpointBytes) {
+    if (prevId && eroded >= CONFIG.lineageDegradeCheckpointBytes) {
       lineageCheckpoint(shrunk, [prevId], 'digest-checkpoint', 'cell');
       erosion.set(shrunk, 0);
     }
@@ -117,7 +117,7 @@ function chromaseExternalTick() {
       fc.bytesErodedSinceCheckpoint = (fc.bytesErodedSinceCheckpoint || 0) + 1;
       if (fc.bytesErodedSinceCheckpoint >= CONFIG.lineageDegradeCheckpointBytes) {
         const prevId = getLineageId(fc.data);
-        if (prevId > 0) lineageCheckpoint(fc.data, [prevId], 'digest-checkpoint', 'free');
+        if (prevId) lineageCheckpoint(fc.data, [prevId], 'digest-checkpoint', 'free');
         fc.bytesErodedSinceCheckpoint = 0;
       }
     }

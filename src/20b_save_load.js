@@ -9,7 +9,9 @@
 // rebuilt without path-walking. Spatial grids are NOT saved — they're rebuilt
 // from positions via the existing rebuildGrid / rebuildFreeProteinGrid helpers.
 
-const SAVE_VERSION = 1;
+// v2: chromosome lineage IDs are now 32-char hex UUIDs (was integers).
+// Old v1 saves are not migrated.
+const SAVE_VERSION = 2;
 
 const TA_CTORS = { Uint8Array, Uint16Array, Uint32Array, Int8Array, Int16Array, Int32Array, Float32Array, Float64Array };
 
@@ -115,7 +117,6 @@ function serializeWorld() {
   wSnap.replicase_job_sourceBytes = world.replicase_job_sourceBytes.map(x => x == null ? null : Array.from(x.entries()));
 
   const lSnap = {
-    nextId: lineage.nextId,
     structVersion: lineage.structVersion,
     nodes: Array.from(lineage.nodes.entries()).map(([id, n]) => [id, _normLineageNode(n)]),
     children: Array.from(lineage.children.entries()).map(([id, set]) => [id, Array.from(set)]),
@@ -181,53 +182,27 @@ async function loadWorldFromFile(file) {
   // 5. Lineage. Wipe stale UI state (highlight, view selection, popup) before
   // restoring snapshot — otherwise prior-run ids dangle in the renderer. After
   // reset, reassign lineage members from the snapshot (we can't go through
-  // assignLineage here because nodes already carry their ids).
+  // lineageUpsert here because nodes already carry their UUIDs).
   lineageReset();
-  lineage.nextId = snap.lineage.nextId;
   lineage.structVersion = snap.lineage.structVersion;
   lineage.nodes = new Map(snap.lineage.nodes.map(([id, n]) => [id, _denormLineageNode(n)]));
   lineage.children = new Map(snap.lineage.children.map(([id, arr]) => [id, new Set(arr)]));
   lineage.redirects = new Map(snap.lineage.redirects);
   lineage.chromToId = new WeakMap();
 
-  // Backfill `gen` for legacy saves (BFS from roots, gen = primary-parent's gen + 1).
-  if (lineage.nodes.size && [...lineage.nodes.values()].some(n => n.gen === undefined)) {
-    for (const n of lineage.nodes.values()) n.gen = -1;
-    const queue = [];
-    for (const [id, n] of lineage.nodes) {
-      if (!(n.primaryParentId > 0) || !lineage.nodes.has(n.primaryParentId)) {
-        n.gen = 0; queue.push(id);
-      }
-    }
-    while (queue.length) {
-      const pid = queue.shift();
-      const pn = lineage.nodes.get(pid); if (!pn) continue;
-      const kids = lineage.children.get(pid); if (!kids) continue;
-      for (const kid of kids) {
-        const kn = lineage.nodes.get(kid); if (!kn) continue;
-        if (kn.primaryParentId !== pid) continue;
-        if (kn.gen >= 0) continue;
-        kn.gen = (pn.gen | 0) + 1;
-        queue.push(kid);
-      }
-    }
-    // Any node still at -1 (cycle / detached primary chain) → fall back to 0.
-    for (const n of lineage.nodes.values()) if (n.gen < 0) n.gen = 0;
-  }
-
-  // Re-register each chromosome with its carried lineage id.
+  // Re-register each chromosome with its carried lineage UUID.
   for (let ci = 0; ci < world.maxCells; ci++) {
     const g = world.genomes[ci];
     if (!g) continue;
     const savedG = snap.world.genomes[ci];
     for (let k = 0; k < g.length; k++) {
       const lid = savedG[k] && savedG[k].lineageId;
-      if (lid > 0) lineage.chromToId.set(g[k], lid);
+      if (lid) lineage.chromToId.set(g[k], lid);
     }
   }
   for (let i = 0; i < world.freeChromosomes.length; i++) {
     const lid = snap.world.freeChromosomes[i] && snap.world.freeChromosomes[i].data.lineageId;
-    if (lid > 0) lineage.chromToId.set(world.freeChromosomes[i].data, lid);
+    if (lid) lineage.chromToId.set(world.freeChromosomes[i].data, lid);
   }
 
   // Reconcile counters with actual buffers (saved snapshot can carry phantom

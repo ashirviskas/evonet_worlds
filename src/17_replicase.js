@@ -41,7 +41,7 @@ function replicaseSummariseLineage(slot) {
   const parents = [];
   const parentBytes = [];
   for (const [pid, bytes] of sb) {
-    if (bytes <= 0) continue;
+    if (!pid || bytes <= 0) continue;
     parents.push(pid);
     parentBytes.push(bytes);
   }
@@ -66,7 +66,7 @@ function replicaseFailJob(slot) {
       const newId = assignLineage(mutated, parents, event, 'cell', parentBytes);
       // If assignLineage rebound to an existing parent (faithful clone), don't
       // overwrite that parent's own parentBytes.
-      if (newId > 0 && parents.indexOf(newId) < 0) {
+      if (newId && parents.indexOf(newId) < 0) {
         const node = lineage.nodes.get(newId);
         if (node) { node.parentBytes = parentBytes; lineageRecomputePrimary(node); }
       }
@@ -202,7 +202,7 @@ function replicaseCompleteJob(slot, genome) {
   const mutated = mutateChromosome(output, CONFIG.mutationRate, true);
   const { parents, parentBytes, event } = replicaseSummariseLineage(slot);
   const newId = assignLineage(mutated, parents, event, 'cell', parentBytes);
-  if (newId > 0 && parents.indexOf(newId) < 0) {
+  if (newId && parents.indexOf(newId) < 0) {
     const node = lineage.nodes.get(newId);
     if (node) { node.parentBytes = parentBytes; lineageRecomputePrimary(node); }
   }
@@ -285,7 +285,7 @@ function replicaseTick() {
         world.replicase_job_output[slot].push(byte);
         world.replicase_job_progress[slot] = (readPos + 1) % src.length;
         const cid = getLineageId(src);
-        if (cid > 0) {
+        if (cid) {
           const sb = world.replicase_job_sourceBytes[slot];
           if (sb) sb.set(cid, (sb.get(cid) || 0) + 1);
         }
@@ -393,7 +393,7 @@ function replicaseTick() {
     // Emit (unless skip-byte error suppressed it).
     if (!skipEmit) {
       world.replicase_job_output[slot].push(copiedByte);
-      if (contributorId > 0) {
+      if (contributorId) {
         const sb = world.replicase_job_sourceBytes[slot];
         if (sb) sb.set(contributorId, (sb.get(contributorId) || 0) + 1);
       }
