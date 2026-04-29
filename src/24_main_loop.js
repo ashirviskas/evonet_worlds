@@ -4,6 +4,10 @@
 // MAIN LOOP
 // ============================================================
 initWorld(); resizeCanvas(); resizeLineageCanvas();
+// Multiverse boot — async. Tick loop gate (multiverseReady) blocks ticks until
+// the whois/iam handshake settles a multiverse position. Render still runs so
+// the user sees the canvas + portal strips during the ~250 ms scan window.
+bootMultiverse().catch(e => console.error('bootMultiverse failed:', e));
 window.addEventListener('resize', () => { resizeCanvas(); resizeLineageCanvas(); });
 
 // Resizable splitters for the left lineage panel and the right inspector panel.
@@ -117,8 +121,8 @@ let tpsWindowStart = performance.now();
 let currentTps = 0;
 function mainLoop() {
   try {
-    if (running) {
-      for (let i = 0; i < ticksPerFrame; i++) tick();
+    if (running && world.multiverseReady) {
+      for (let i = 0; i < ticksPerFrame; i++) { tick(); multiverseHeartbeatTick(); }
       tpsTicks += ticksPerFrame;
     }
     const nowT = performance.now();

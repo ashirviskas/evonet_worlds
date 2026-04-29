@@ -530,6 +530,13 @@ const CONFIG = {
   lineageDegradeCheckpointBytes: 8,       // emit a checkpoint node every N bytes eroded by degrade/digest
   lineageCrossoverMinBytes: 4,            // per-parent contribution to count as crossover vs minor switch
   lineageDebugAssert: false,              // flip on to run lineageAssertInvariants() at the tail of each prune sweep
+
+  // --- Cross-tab portals (multiverse) ---
+  portalStripFrac: 0.30,                  // fraction of each wall (centered) that is a portal; outside the strip the wall bounces
+  portalAncestryDepth: 50,                // BFS depth cap when serving portal-lineage-fill requests
+  portalHeartbeatTicks: 600,              // ticks between iam heartbeats (~10 s at 60 tps)
+  portalFillTimeoutMs: 5000,              // ms a receiver waits for portal-lineage-fill before orphaning pending nodes
+  portalBootScanMs: 250,                  // ms a booting tab listens for iam replies before placing itself
 };
 
 // ===== 02_protein_info.js =====
@@ -1009,6 +1016,18 @@ const world = {
     threeGenLineage: 0, cellSurvived10k: 0, maxPopulation: 0, cellMoved: 0, photonsAbsorbed: 0,
     freePSpawned: 0, freeChromSpawned: 0, replicaseCompleted: 0, replicaseFailed: 0,
     membraneDivisions: 0, chromAbsorptions: 0, chromEjections: 0 },
+
+  // --- Multiverse / cross-tab portals (set up by 23c_multiverse.js). ---
+  // uuid + color identify this tab session. multiverseX/Y are integer coords
+  // assigned at boot via the whois/iam handshake. neighbors[side] is the uuid
+  // of the world adjacent on that side, or null. knownWorlds is the full
+  // {uuid → {mx,my,color,lastSeenTick}} table for the upcoming multiverse
+  // view; populated by iam messages and pruned on bye/heartbeat-timeout.
+  uuid: null, color: null,
+  multiverseX: 0, multiverseY: 0,
+  neighbors: { left: null, right: null, top: null, bottom: null },
+  knownWorlds: null,
+  multiverseReady: false,
 };
 
 const TOTAL_SUBSLOTS_PER_CELL = NUM_SLOTS * NUM_SUBSLOTS; // 70
@@ -1161,9 +1180,13 @@ function initWorld() {
   }
 }
 
+function _findFreeSlot() {
+  for (let i = 0; i < world.maxCells; i++) { if (!world.alive[i]) return i; }
+  return -1;
+}
+
 function spawnCell(x, y, parentId, generation, radiusOverride) {
-  let idx = -1;
-  for (let i = 0; i < world.maxCells; i++) { if (!world.alive[i]) { idx = i; break; } }
+  const idx = _findFreeSlot();
   if (idx === -1) return -1;
 
   world.alive[idx] = 1;
@@ -1636,15 +1659,41 @@ function tick() {
 
   if (world.tick % CONFIG.lineagePruneInterval === 0) lineagePrune();
 
+  // Portal strip bounds (precomputed per tick — cheap).
+  const W = CONFIG.worldWidth, H = CONFIG.worldHeight;
+  const f = CONFIG.portalStripFrac;
+  const xLo = (1 - f) / 2 * W, xHi = (1 + f) / 2 * W;
+  const yLo = (1 - f) / 2 * H, yHi = (1 + f) / 2 * H;
+  const ngh = world.neighbors;
   for (let i = 0; i < world.maxCells; i++) {
     if (!world.alive[i]) continue;
     world.pos_x[i] += world.vel_x[i]; world.pos_y[i] += world.vel_y[i];
     world.vel_x[i] *= 0.95; world.vel_y[i] *= 0.95;
     const r = world.radius[i];
-    if (world.pos_x[i] < r) { world.pos_x[i] = r; world.vel_x[i] *= -0.5; }
-    if (world.pos_x[i] > CONFIG.worldWidth - r) { world.pos_x[i] = CONFIG.worldWidth - r; world.vel_x[i] *= -0.5; }
-    if (world.pos_y[i] < r) { world.pos_y[i] = r; world.vel_y[i] *= -0.5; }
-    if (world.pos_y[i] > CONFIG.worldHeight - r) { world.pos_y[i] = CONFIG.worldHeight - r; world.vel_y[i] *= -0.5; }
+    // Touching a wall in the middle 30% strip with a neighbor on that side
+    // ejects the cell to that neighbor's opposite-side strip. Otherwise
+    // standard wall-bounce. Order: x-axis walls first, then y-axis. portalEject
+    // frees the slot, so we `continue` past the rest of this cell's checks.
+    if (world.pos_x[i] < r) {
+      if (world.pos_y[i] > yLo && world.pos_y[i] < yHi && ngh && ngh.left
+          && typeof portalEject === 'function' && portalEject(i, 'left')) continue;
+      world.pos_x[i] = r; world.vel_x[i] *= -0.5;
+    }
+    if (world.pos_x[i] > W - r) {
+      if (world.pos_y[i] > yLo && world.pos_y[i] < yHi && ngh && ngh.right
+          && typeof portalEject === 'function' && portalEject(i, 'right')) continue;
+      world.pos_x[i] = W - r; world.vel_x[i] *= -0.5;
+    }
+    if (world.pos_y[i] < r) {
+      if (world.pos_x[i] > xLo && world.pos_x[i] < xHi && ngh && ngh.top
+          && typeof portalEject === 'function' && portalEject(i, 'top')) continue;
+      world.pos_y[i] = r; world.vel_y[i] *= -0.5;
+    }
+    if (world.pos_y[i] > H - r) {
+      if (world.pos_x[i] > xLo && world.pos_x[i] < xHi && ngh && ngh.bottom
+          && typeof portalEject === 'function' && portalEject(i, 'bottom')) continue;
+      world.pos_y[i] = H - r; world.vel_y[i] *= -0.5;
+    }
   }
 
   world.milestones.cellMakingDivider = makingDivider;
@@ -2850,6 +2899,11 @@ const lineage = {
   prunedSafetyDrops: 0,
   collapsedMerges: 0,
   ghostParentsRepaired: 0,       // debug: times getLineageId followed a redirect chain
+  // Cross-tab portal index — "originWorldUuid:originLocalId" -> localId for
+  // every node that arrived from another world. Lets catch/fill paths dedup
+  // on foreign identity without scanning all nodes. Populated only by
+  // 23e_portal_lineage.js's import path; cleared in lineageReset.
+  foreignIndex: new Map(),
 };
 
 function lineageHashPrefix(u8) {
@@ -3051,6 +3105,87 @@ function lineageWalkAncestorsAlive(node, delta) {
   }
 }
 
+// Insert a node that arrived from another world via a portal. Bypasses the
+// dedup paths in assignLineage — the donor already gave us a fully-formed
+// identity (origin uuid + originLocalId) and we mint a fresh local id, so
+// foreign nodes never collide with locally-born nodes. parents must already
+// be rewritten to LOCAL ids by the caller. Returns the new local id.
+//
+// chrom: Uint8Array carrying the chromosome bytes (held by a cell or free pool).
+// fields: { parents, originWorldUuid, originLocalId, event, birthTick?, gen?,
+//           srcWorldUuid?, srcTick?, copies?, copiesInCells?, copiesInFree? }.
+// holder: 'cell' | 'free' (drives the live-pool counter).
+function lineageInsertImported(chrom, fields, holder) {
+  const id = lineage.nextId++;
+  const parentsArr = Array.isArray(fields.parents) ? fields.parents.filter(p => p > 0 && lineage.nodes.has(p)) : [];
+  const node = {
+    id,
+    parents: parentsArr,
+    parentBytes: null,
+    shape: chromosomeShape(chrom),
+    length: chrom.length,
+    hashPrefix: lineageHashPrefix(chrom),
+    data: new Uint8Array(chrom),
+    birthTick: fields.birthTick != null ? fields.birthTick : world.tick,
+    event: fields.event || 'portal-in',
+    alive: 1,
+    copies: fields.copies != null ? fields.copies : 1,
+    copiesInCells: holder === 'cell' ? 1 : 0,
+    copiesInFree:  holder === 'free' ? 1 : 0,
+    copiesEver: 1,
+    directChildrenAlive: 0,
+    descendantsEver: 0,
+    descendantsAlive: 0,
+    contributesToDescendants: true,
+    deathTick: 0,
+    mergedCount: 0,
+    primaryParentId: parentsArr.length ? parentsArr[0] : -1,
+    gen: fields.gen != null ? fields.gen : 0,
+    // Portal provenance:
+    originWorldUuid: fields.originWorldUuid,
+    originLocalId: fields.originLocalId,
+    srcWorldUuid: fields.srcWorldUuid,
+    srcTick: fields.srcTick,
+  };
+  lineage.nodes.set(id, node);
+  lineage.chromToId.set(chrom, id);
+  if (fields.originWorldUuid && fields.originLocalId != null) {
+    lineage.foreignIndex.set(`${fields.originWorldUuid}:${fields.originLocalId}`, id);
+  }
+  if (node.primaryParentId > 0 && node.gen === 0) {
+    const pn = lineage.nodes.get(node.primaryParentId);
+    if (pn) node.gen = (pn.gen | 0) + 1;
+  }
+  for (const pid of parentsArr) {
+    lineageAddChild(pid, id);
+    const pn = lineage.nodes.get(pid);
+    if (pn) pn.directChildrenAlive++;
+  }
+  // Ancestor descendantsAlive rollup (DAG-safe).
+  const seen = new Set();
+  const stack = parentsArr.slice();
+  while (stack.length) {
+    const pid = stack.pop();
+    if (seen.has(pid)) continue;
+    seen.add(pid);
+    const pn = lineage.nodes.get(pid);
+    if (!pn) continue;
+    pn.descendantsEver++;
+    pn.descendantsAlive = (pn.descendantsAlive || 0) + 1;
+    for (const gp of pn.parents) stack.push(gp);
+  }
+  lineage.structVersion++;
+  return id;
+}
+
+// Lookup: have we seen this foreign chromosome before?
+// Returns the local id if yes, -1 if no.
+function lineageLookupForeign(originWorldUuid, originLocalId) {
+  if (!originWorldUuid || originLocalId == null) return -1;
+  const id = lineage.foreignIndex.get(`${originWorldUuid}:${originLocalId}`);
+  return (id && lineage.nodes.has(id)) ? id : -1;
+}
+
 function getLineageId(chrom) {
   if (!chrom) return -1;
   let id = lineage.chromToId.get(chrom);
@@ -3080,6 +3215,7 @@ function lineageReset() {
   lineage.children.clear();
   lineage.chromToId = new WeakMap();
   lineage.redirects.clear();
+  lineage.foreignIndex.clear();
   lineage.structVersion++;
   lineage.prunedSafetyDrops = 0;
   lineage.collapsedMerges = 0;
@@ -4559,6 +4695,32 @@ function render() {
   const wtl = worldToScreen(0, 0), wbr = worldToScreen(CONFIG.worldWidth, CONFIG.worldHeight);
   ctx.strokeStyle = '#333'; ctx.strokeRect(wtl.x, wtl.y, wbr.x - wtl.x, wbr.y - wtl.y);
 
+  // Portal strips — middle CONFIG.portalStripFrac of each wall. Active side
+  // (neighbor present) gets world.color; closed side gets a dim gray. The
+  // strip is the visual cue for the portal-touch eject in 07_tick.js.
+  if (world.uuid) {
+    const W = CONFIG.worldWidth, H = CONFIG.worldHeight;
+    const f = CONFIG.portalStripFrac;
+    const lo = (1 - f) / 2, hi = (1 + f) / 2;
+    const xLo = lo * W, xHi = hi * W, xLen = xHi - xLo;
+    const yLo = lo * H, yHi = hi * H, yLen = yHi - yLo;
+    // Strip drawn just inside the wall, ~6 world units thick.
+    const t = 6;
+    const activeFill = world.color || 'hsl(0, 0%, 50%)';
+    const closedFill = 'rgba(80, 80, 80, 0.5)';
+    const drawStrip = (wx, wy, ww, wh, side) => {
+      const tl = worldToScreen(wx, wy), br = worldToScreen(wx + ww, wy + wh);
+      ctx.fillStyle = world.neighbors && world.neighbors[side] ? activeFill : closedFill;
+      ctx.globalAlpha = world.neighbors && world.neighbors[side] ? 0.55 : 0.25;
+      ctx.fillRect(tl.x, tl.y, br.x - tl.x, br.y - tl.y);
+      ctx.globalAlpha = 1;
+    };
+    drawStrip(xLo, 0,         xLen, t,    'top');
+    drawStrip(xLo, H - t,     xLen, t,    'bottom');
+    drawStrip(0,   yLo,       t,    yLen, 'left');
+    drawStrip(W - t, yLo,     t,    yLen, 'right');
+  }
+
   // Debug: spatial-grid bucket heatmap (toggle with B).
   if (showBuckets) {
     const grid = showBuckets === 2 ? world.freePGrid : world.grid;
@@ -5141,6 +5303,12 @@ function edgeColorForEvent(event, isMain) {
     case 'degrade-checkpoint': return isMain ? 'rgba(210,110,80,0.8)'  : 'rgba(180,90,60,0.35)';
     case 'digest-checkpoint':  return isMain ? 'rgba(220,100,150,0.8)' : 'rgba(180,80,120,0.35)';
     case 'clone':              return isMain ? 'rgba(200,200,200,0.8)' : 'rgba(170,170,170,0.35)';
+    // Cross-tab portal events (see 23e_portal_lineage.js for lifecycle).
+    case 'portal-out':         return isMain ? 'rgba(255,140,60,0.85)' : 'rgba(220,110,40,0.35)';   // donor leaf — orange
+    case 'portal-in':          return isMain ? 'rgba(80,200,200,0.85)' : 'rgba(60,160,160,0.35)';   // arrived w/ ancestry — teal
+    case 'portal-in-pending':  return isMain ? 'rgba(220,200,80,0.85)' : 'rgba(180,160,60,0.35)';   // awaiting fill — yellow
+    case 'portal-in-orphan':   return isMain ? 'rgba(180,90,90,0.85)'  : 'rgba(140,60,60,0.35)';    // donor closed — dim red
+    case 'portal-revisit':     return isMain ? 'rgba(190,130,230,0.85)': 'rgba(150,100,190,0.35)';  // round-trip — purple
     case 'replicase':
     default:                   return isMain ? 'rgba(120,200,255,0.8)' : 'rgba(120,200,255,0.3)';
   }
@@ -7233,6 +7401,697 @@ function autoLoadDefaultPreset() {
 }
 autoLoadDefaultPreset();
 
+// ===== 23c_multiverse.js =====
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Matas Minelga
+// ============================================================
+// MULTIVERSE — world identity + adjacency placement.
+// ============================================================
+// Each tab session is one "world" in a multiverse of worlds running in sibling
+// tabs. Identity: a fresh uuid + random color generated at boot (NOT seeded —
+// reload of the same seed gets a new color). Position: integer (mx, my) on a
+// 2D grid, picked by scanning what's already out there and slotting in next
+// to one existing world. Comms: 23d_portal_bus.js owns the channel; we just
+// emit/consume the boot-time messages and the steady-state heartbeats.
+// ============================================================
+
+// Init identity. Called once before bootMultiverse(). Idempotent — guarded by
+// presence of world.uuid so re-init (e.g. via load) doesn't change identity.
+function initMultiverseIdentity() {
+  if (world.uuid) return;
+  world.uuid = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : _fallbackUuid();
+  // Per-tab identity color. NOT seed-derived — the multiverse position/color
+  // is about the tab's role, not the simulation's deterministic state.
+  const hue = Math.floor(Math.random() * 360);
+  world.color = `hsl(${hue}, 70%, 60%)`;
+  world.knownWorlds = new Map();
+  world.neighbors = { left: null, right: null, top: null, bottom: null };
+}
+
+function _fallbackUuid() {
+  // Sufficient for same-PC tab discrimination; not a security UUID.
+  const r = () => Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, '0');
+  return `${r()}-${r()}-${r()}-${r()}`;
+}
+
+// Free 4-neighbor cells around the union of known worlds. Returns sorted
+// list of {mx, my} strings (we use string keys for set semantics).
+function _freeAdjacencyCandidates() {
+  const occupied = new Set();
+  for (const [, w] of world.knownWorlds) occupied.add(`${w.mx},${w.my}`);
+  const candidates = new Set();
+  for (const [, w] of world.knownWorlds) {
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const k = `${w.mx + dx},${w.my + dy}`;
+      if (!occupied.has(k)) candidates.add(k);
+    }
+  }
+  return [...candidates].map(k => {
+    const [mx, my] = k.split(',').map(Number);
+    return { mx, my };
+  }).sort((a, b) => a.mx - b.mx || a.my - b.my);
+}
+
+// Given knownWorlds + our (mx, my), populate world.neighbors[side] with the
+// uuid of the adjacent world (if any).
+function _recomputeNeighbors() {
+  const sides = { left: [-1, 0], right: [1, 0], top: [0, -1], bottom: [0, 1] };
+  for (const side in sides) {
+    const [dx, dy] = sides[side];
+    const tx = world.multiverseX + dx, ty = world.multiverseY + dy;
+    let found = null;
+    for (const [uuid, w] of world.knownWorlds) {
+      if (w.mx === tx && w.my === ty) { found = uuid; break; }
+    }
+    world.neighbors[side] = found;
+  }
+}
+
+// Promise-returning placement. Caller (24_main_loop.js) awaits this before
+// flipping the multiverseReady flag and starting the tick loop.
+//
+// Wrapped in navigator.locks to serialize boot-time placement so two
+// simultaneously-opened tabs don't pick the same coord. Falls back to
+// best-effort lex-smallest pick if the Locks API is unavailable.
+async function bootMultiverse() {
+  initMultiverseIdentity();
+  portalBusOpen();   // 23d_portal_bus.js — sets up onmessage dispatch
+
+  const placeBody = async () => {
+    portalBusSend({ type: 'whois', srcWorldUuid: world.uuid });
+    await new Promise(resolve => setTimeout(resolve, CONFIG.portalBootScanMs));
+    if (world.knownWorlds.size === 0) {
+      world.multiverseX = 0;
+      world.multiverseY = 0;
+    } else {
+      const cands = _freeAdjacencyCandidates();
+      const pick = cands[0];   // lex-smallest
+      world.multiverseX = pick.mx;
+      world.multiverseY = pick.my;
+    }
+    _recomputeNeighbors();
+    portalBusSend({
+      type: 'iam',
+      srcWorldUuid: world.uuid,
+      mx: world.multiverseX,
+      my: world.multiverseY,
+      color: world.color,
+    });
+  };
+
+  if (typeof navigator !== 'undefined' && navigator.locks && navigator.locks.request) {
+    await navigator.locks.request('evonet-multiverse-place', placeBody);
+  } else {
+    await placeBody();
+  }
+
+  // bye on unload — neighbors null out our side and desaturate the strip.
+  window.addEventListener('beforeunload', () => {
+    portalBusSend({ type: 'bye', srcWorldUuid: world.uuid });
+  });
+
+  world.multiverseReady = true;
+}
+
+// Heartbeat tick — called from the main tick loop every CONFIG.portalHeartbeatTicks.
+// Re-broadcasts our iam so late-joining tabs (and tabs that missed the boot
+// chatter) see us, and prunes neighbors we haven't heard from in 3 heartbeats.
+function multiverseHeartbeatTick() {
+  if (!world.multiverseReady) return;
+  if ((world.tick % CONFIG.portalHeartbeatTicks) !== 0) return;
+  portalBusSend({
+    type: 'iam',
+    srcWorldUuid: world.uuid,
+    mx: world.multiverseX,
+    my: world.multiverseY,
+    color: world.color,
+  });
+  // Stale prune. lastSeenTick is set by 23d_portal_bus.js on every iam.
+  const stale = world.tick - 3 * CONFIG.portalHeartbeatTicks;
+  for (const [uuid, w] of world.knownWorlds) {
+    if (w.lastSeenTick < stale) {
+      world.knownWorlds.delete(uuid);
+    }
+  }
+  _recomputeNeighbors();
+}
+
+// Called from 23d_portal_bus.js on every iam. Updates knownWorlds + neighbors.
+// Returns true if this is a fresh world we hadn't seen.
+function multiverseObserveIam(srcUuid, mx, my, color) {
+  if (srcUuid === world.uuid) return false;
+  const existing = world.knownWorlds.get(srcUuid);
+  const fresh = !existing;
+  world.knownWorlds.set(srcUuid, { mx, my, color, lastSeenTick: world.tick });
+  _recomputeNeighbors();
+  return fresh;
+}
+
+// Called from 23d_portal_bus.js on bye.
+function multiverseObserveBye(srcUuid) {
+  if (world.knownWorlds.delete(srcUuid)) _recomputeNeighbors();
+}
+
+// ===== 23d_portal_bus.js =====
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Matas Minelga
+// ============================================================
+// PORTAL BUS — BroadcastChannel comms for the multiverse.
+// ============================================================
+// Same-origin pub/sub between tabs of poc.html. All multiverse-scoped traffic
+// flows through this single channel: world discovery (whois/iam/bye), cell
+// portal-eject events, and the lazy lineage request/fill protocol. We do
+// nothing here beyond plumbing — the actual handler bodies live in
+// 23c_multiverse.js (identity/discovery) and 23e_portal_lineage.js (cell +
+// lineage transport). BroadcastChannel does not deliver the sender's own
+// messages back to itself, so no self-filter is needed.
+// ============================================================
+
+const portalBus = {
+  channel: null,
+  // Idempotency: msgIds we've already processed. Bounded by tick-based prune
+  // every CONFIG.portalHeartbeatTicks to avoid unbounded growth.
+  seenMsgIds: new Set(),
+  seenMsgIdsList: [],   // FIFO ring for cheap prune
+  seenMsgIdsCap: 4096,
+};
+
+function portalBusOpen() {
+  if (portalBus.channel) return;
+  if (typeof BroadcastChannel === 'undefined') {
+    console.warn('BroadcastChannel unavailable — multiverse disabled.');
+    return;
+  }
+  portalBus.channel = new BroadcastChannel('evonet-multiverse');
+  portalBus.channel.onmessage = (ev) => _portalBusDispatch(ev.data);
+}
+
+function portalBusSend(msg) {
+  if (!portalBus.channel) return;
+  if (!msg.msgId) msg.msgId = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+  try {
+    portalBus.channel.postMessage(msg);
+  } catch (e) {
+    console.warn('portalBusSend failed:', e, msg.type);
+  }
+}
+
+function _portalBusSeen(msgId) {
+  if (!msgId) return false;
+  if (portalBus.seenMsgIds.has(msgId)) return true;
+  portalBus.seenMsgIds.add(msgId);
+  portalBus.seenMsgIdsList.push(msgId);
+  if (portalBus.seenMsgIdsList.length > portalBus.seenMsgIdsCap) {
+    const drop = portalBus.seenMsgIdsList.shift();
+    portalBus.seenMsgIds.delete(drop);
+  }
+  return false;
+}
+
+function _portalBusDispatch(m) {
+  if (!m || !m.type || m.srcWorldUuid === world.uuid) return;
+  // Per-message-type targeting check happens in handlers; whois/iam/bye are
+  // always-broadcast.
+  switch (m.type) {
+    case 'whois':
+      // Reply with our current iam — only if we've already placed ourselves.
+      // (If we're still booting, the requester will see us via its own
+      // boot-time scan window or our subsequent heartbeat.)
+      if (world.multiverseReady) {
+        portalBusSend({
+          type: 'iam',
+          srcWorldUuid: world.uuid,
+          mx: world.multiverseX,
+          my: world.multiverseY,
+          color: world.color,
+        });
+      }
+      break;
+    case 'iam':
+      multiverseObserveIam(m.srcWorldUuid, m.mx, m.my, m.color);
+      break;
+    case 'bye':
+      multiverseObserveBye(m.srcWorldUuid);
+      break;
+    case 'portal-eject':
+      if (m.dstWorldUuid !== world.uuid) return;
+      if (_portalBusSeen(m.msgId)) return;
+      catchJumper(m);
+      break;
+    case 'portal-lineage-request':
+      if (m.dstWorldUuid !== world.uuid) return;
+      if (_portalBusSeen(m.msgId)) return;
+      replyLineageFill(m);
+      break;
+    case 'portal-lineage-fill':
+      if (m.dstWorldUuid !== world.uuid) return;
+      if (_portalBusSeen(m.msgId)) return;
+      mergeLineageFill(m);
+      break;
+    default:
+      // Unknown type — ignore. Forward-compat with future message types.
+      break;
+  }
+}
+
+// ===== 23e_portal_lineage.js =====
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Matas Minelga
+// ============================================================
+// PORTAL LINEAGE — eject / catch / lazy ancestry fetch.
+// ============================================================
+// Donor side:
+//   portalEject(i, side)  — capture cell state, mark donor lineage, postMessage,
+//                           evict the slot.
+//   replyLineageFill(req) — serve a BFS subtree (depth-bounded, full DAG)
+//                           rooted at the requested local lineage ids.
+//
+// Receiver side:
+//   catchJumper(payload)  — slot the cell at the opposite portal, register
+//                           genome lineage with foreignIndex, request fill if
+//                           any genome's ancestry is unknown locally.
+//   mergeLineageFill(p)   — splice incoming ancestor nodes into the local
+//                           tree, promote pending → portal-in.
+// ============================================================
+
+const SIDE_OPP = { left: 'right', right: 'left', top: 'bottom', bottom: 'top' };
+
+// Pending fills per srcWorldUuid msgId — { foreignIds, timeoutHandle, perGenome }.
+// perGenome is the list of local pending node ids that need their parents
+// wired up once the fill arrives.
+const portalPending = new Map();
+
+// ---- DONOR SIDE -----------------------------------------------------------
+
+function portalEject(i, side) {
+  const dstUuid = world.neighbors[side];
+  if (!dstUuid) return false;
+
+  // 1) Capture cell state into a structured-cloneable payload BEFORE we evict
+  //    (eviction clears the per-cell typed arrays).
+  const cell = _serializeCellState(i, side);
+
+  // 2) Capture genomes + their foreign-tagged lineage ids. The receiver uses
+  //    these to either dedup against its foreignIndex or open a pending node
+  //    that triggers a portal-lineage-request.
+  const genomes = [];
+  const localLineageIdsForOut = [];
+  const g = world.genomes[i];
+  if (g) {
+    for (let c = 0; c < g.length; c++) {
+      const chrom = g[c];
+      const lid = getLineageId(chrom);
+      if (lid <= 0) continue;
+      const node = lineage.nodes.get(lid);
+      // Origin perspective for the receiver:
+      //  - If this chrom was already a portal-in from somewhere else, preserve
+      //    the original origin so the chain of custody is unbroken across hops.
+      //  - Otherwise the origin is us.
+      const origUuid  = node && node.originWorldUuid  ? node.originWorldUuid  : world.uuid;
+      const origLocal = node && node.originLocalId != null ? node.originLocalId : lid;
+      genomes.push({
+        data: new Uint8Array(chrom),
+        originWorldUuid: origUuid,
+        originLocalId: origLocal,
+      });
+      localLineageIdsForOut.push(lid);
+    }
+  }
+
+  // 3) Tag the donor's primary lineage node(s) with portal-out.
+  for (const lid of localLineageIdsForOut) {
+    const node = lineage.nodes.get(lid);
+    if (!node) continue;
+    node.event = 'portal-out';
+    node.dstWorldUuid = dstUuid;
+    node.portalSide = side;
+  }
+  lineage.structVersion++;
+
+  // 4) Build + send the eject payload.
+  portalBusSend({
+    type: 'portal-eject',
+    srcWorldUuid: world.uuid,
+    srcTick: world.tick,
+    srcSide: side,
+    dstWorldUuid: dstUuid,
+    cell,
+    genomes,
+  });
+
+  // 5) Evict the donor slot. Custom — skip protein/chromosome release because
+  //    everything went with the cell to the receiver. Replicase jobs are
+  //    cancelled (they don't survive the trip in v1).
+  portalEvictCell(i);
+  return true;
+}
+
+// Like killCell but does NOT release internal proteins / subslot proteins /
+// chromosomes as free chromosomes — the cell is leaving in one piece.
+// Replicase jobs are cancelled (transient state; receiver re-enters naturally).
+function portalEvictCell(cellIdx) {
+  replicaseFreeAllForCell(cellIdx);
+  gridRemoveCell(cellIdx);
+  world.alive[cellIdx] = 0;
+  world.numCells--;
+  // Clear per-cell typed arrays so the slot is reusable.
+  for (let t = 0; t < 64; t++) world.internalProteins[cellIdx * 64 + t] = 0;
+  world.cytoOccMask[cellIdx * 2] = 0;
+  world.cytoOccMask[cellIdx * 2 + 1] = 0;
+  for (let s = 0; s < NUM_SLOTS; s++) {
+    world.slotOpen[cellIdx * NUM_SLOTS + s] = 0;
+    for (let ss = 0; ss < NUM_SUBSLOTS; ss++) {
+      const si = subIdx(cellIdx, s, ss);
+      world.subslotType[si] = 255;
+      world.subslotCount[si] = 0;
+    }
+  }
+  for (let w = 0; w < 3; w++) world.subslotOccMask[cellIdx * 3 + w] = 0;
+  for (let s = 0; s < NUM_SLOTS; s++) for (let t = 0; t < 64; t++) world.slotTypeCount[(cellIdx * NUM_SLOTS + s) * 64 + t] = 0;
+  for (let t = 0; t < 64; t++) world.decayNextCyto[cellIdx * 64 + t] = 0;
+  for (let k = 0; k < TOTAL_SUBSLOTS_PER_CELL; k++) world.decayNextSub[cellIdx * TOTAL_SUBSLOTS_PER_CELL + k] = 0;
+  world.genomes[cellIdx] = null;
+  world.membraneDividing[cellIdx] = 0;
+}
+
+function _serializeCellState(i, srcSide) {
+  // posPerp: the perpendicular axis at the wall. For left/right walls, that's y;
+  // for top/bottom walls, that's x. Receiver maps to its own world dimensions.
+  const W = CONFIG.worldWidth, H = CONFIG.worldHeight;
+  const posPerp = (srcSide === 'left' || srcSide === 'right') ? world.pos_y[i] / H : world.pos_x[i] / W;
+
+  // Slice per-cell typed array regions so we ship just this cell's bytes.
+  const subStart = i * TOTAL_SUBSLOTS_PER_CELL;
+  const slotTypeStart = i * NUM_SLOTS * 64;
+
+  return {
+    posPerp,
+    vel_x: world.vel_x[i], vel_y: world.vel_y[i],
+    radius: world.radius[i],
+    energy: world.energy[i],
+    cellUpkeep: world.cellUpkeep[i],
+    membraneHP: world.membraneHP[i],
+    age: world.age[i],
+    generation: world.generation[i],
+    dividing: world.dividing[i],
+    membraneDividing: world.membraneDividing[i],
+    internalProteins: new Uint16Array(world.internalProteins.subarray(i * 64, i * 64 + 64)),
+    subslotType:  new Uint8Array(world.subslotType.subarray(subStart, subStart + TOTAL_SUBSLOTS_PER_CELL)),
+    subslotCount: new Uint8Array(world.subslotCount.subarray(subStart, subStart + TOTAL_SUBSLOTS_PER_CELL)),
+    slotOpen:     new Uint8Array(world.slotOpen.subarray(i * NUM_SLOTS, i * NUM_SLOTS + NUM_SLOTS)),
+    slotTypeCount: new Uint8Array(world.slotTypeCount.subarray(slotTypeStart, slotTypeStart + NUM_SLOTS * 64)),
+    cytoOccMask:    new Uint32Array(world.cytoOccMask.subarray(i * 2, i * 2 + 2)),
+    subslotOccMask: new Uint32Array(world.subslotOccMask.subarray(i * 3, i * 3 + 3)),
+    ribo_chromIdx: world.ribo_chromIdx[i], ribo_offset: world.ribo_offset[i],
+    ribo_holding: world.ribo_holding[i], ribo_heldOpcode: world.ribo_heldOpcode[i],
+    ribo_searchMode: world.ribo_searchMode[i], ribo_searchByte: world.ribo_searchByte[i],
+    ribo_searchTicks: world.ribo_searchTicks[i], ribo_tickCounter: world.ribo_tickCounter[i],
+  };
+}
+
+// ---- RECEIVER SIDE --------------------------------------------------------
+
+function catchJumper(payload) {
+  const idx = _findFreeSlot();
+  if (idx === -1) return;   // receiver is full — drop. Donor already evicted.
+
+  const W = CONFIG.worldWidth, H = CONFIG.worldHeight;
+  const dstSide = SIDE_OPP[payload.srcSide] || 'left';
+  const r = payload.cell.radius || CONFIG.spawnRadius;
+  let px, py;
+  switch (dstSide) {
+    case 'left':   px = r;     py = payload.cell.posPerp * H; break;
+    case 'right':  px = W - r; py = payload.cell.posPerp * H; break;
+    case 'top':    py = r;     px = payload.cell.posPerp * W; break;
+    case 'bottom': py = H - r; px = payload.cell.posPerp * W; break;
+  }
+
+  // Clamp posPerp into the strip (we only eject inside the strip, and the
+  // donor's strip frac matches ours — defensive clamp anyway).
+  py = Math.max(r, Math.min(H - r, py));
+  px = Math.max(r, Math.min(W - r, px));
+
+  _restoreCellState(idx, payload.cell, px, py);
+
+  // Lineage / genomes.
+  const localLineageIds = [];
+  const pendingForeign = [];
+  const pendingLocalIds = [];
+  const genomes = [];
+  for (const g of payload.genomes) {
+    const chrom = new Uint8Array(g.data);
+    const existing = lineageLookupForeign(g.originWorldUuid, g.originLocalId);
+    let lid;
+    if (existing > 0) {
+      // Already in our tree — bump copies on this node, rebind chrom buffer.
+      const node = lineage.nodes.get(existing);
+      lid = existing;
+      if (node) {
+        node.event = (node.event === 'portal-in' || node.event === 'portal-revisit') ? 'portal-revisit' : 'portal-in';
+        node.srcWorldUuid = payload.srcWorldUuid;
+        node.srcTick = payload.srcTick;
+        lineageBumpCopies(node, 'cell');
+      }
+      lineage.chromToId.set(chrom, lid);
+    } else {
+      // Fresh — insert as portal-in-pending; we'll request ancestry below.
+      lid = lineageInsertImported(chrom, {
+        parents: [],
+        originWorldUuid: g.originWorldUuid,
+        originLocalId: g.originLocalId,
+        event: 'portal-in-pending',
+        srcWorldUuid: payload.srcWorldUuid,
+        srcTick: payload.srcTick,
+      }, 'cell');
+      pendingForeign.push({ originWorldUuid: g.originWorldUuid, originLocalId: g.originLocalId });
+      pendingLocalIds.push(lid);
+    }
+    genomes.push(chrom);
+    localLineageIds.push(lid);
+  }
+
+  world.genomes[idx] = genomes;
+  world.alive[idx] = 1;
+  world.numCells++;
+  gridAddCell(idx);
+  lineage.structVersion++;
+
+  // Ask the donor for ancestry, if any genome is fresh.
+  if (pendingForeign.length > 0) {
+    const reqMsgId = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+    portalBusSend({
+      type: 'portal-lineage-request',
+      msgId: reqMsgId,
+      srcWorldUuid: world.uuid,
+      dstWorldUuid: payload.srcWorldUuid,
+      requestedForeignIds: pendingForeign,
+      depth: CONFIG.portalAncestryDepth,
+    });
+    const handle = setTimeout(() => {
+      // Donor likely closed — orphan the still-pending nodes.
+      for (const lid of pendingLocalIds) {
+        const n = lineage.nodes.get(lid);
+        if (n && n.event === 'portal-in-pending') n.event = 'portal-in-orphan';
+      }
+      lineage.structVersion++;
+      portalPending.delete(reqMsgId);
+    }, CONFIG.portalFillTimeoutMs);
+    portalPending.set(reqMsgId, { foreignIds: pendingForeign, pendingLocalIds, timeoutHandle: handle });
+  }
+}
+
+function _restoreCellState(idx, cell, px, py) {
+  world.pos_x[idx] = px; world.pos_y[idx] = py;
+  world.vel_x[idx] = cell.vel_x || 0; world.vel_y[idx] = cell.vel_y || 0;
+  world.radius[idx] = cell.radius || CONFIG.spawnRadius;
+  if (world.radius[idx] > world.maxRadius) world.maxRadius = world.radius[idx];
+  world.energy[idx] = cell.energy || 0;
+  world.cellUpkeep[idx] = cell.cellUpkeep || CONFIG.metabolismCost;
+  world.membraneHP[idx] = cell.membraneHP || CONFIG.membraneMaxHP;
+  world.age[idx] = cell.age || 0;
+  world.parentId[idx] = -1;   // foreign — local parent slot does not exist
+  world.generation[idx] = cell.generation || 0;
+  world.dividing[idx] = cell.dividing || 0;
+  world.membraneDividing[idx] = cell.membraneDividing || 0;
+  world.replicase_activeCount[idx] = 0;
+
+  // Per-cell typed-array regions.
+  if (cell.internalProteins) world.internalProteins.set(cell.internalProteins, idx * 64);
+  if (cell.subslotType)  world.subslotType.set(cell.subslotType,  idx * TOTAL_SUBSLOTS_PER_CELL);
+  if (cell.subslotCount) world.subslotCount.set(cell.subslotCount, idx * TOTAL_SUBSLOTS_PER_CELL);
+  if (cell.slotOpen)     world.slotOpen.set(cell.slotOpen,         idx * NUM_SLOTS);
+  if (cell.slotTypeCount) world.slotTypeCount.set(cell.slotTypeCount, idx * NUM_SLOTS * 64);
+  if (cell.cytoOccMask)    world.cytoOccMask.set(cell.cytoOccMask,    idx * 2);
+  if (cell.subslotOccMask) world.subslotOccMask.set(cell.subslotOccMask, idx * 3);
+
+  world.ribo_chromIdx[idx]  = cell.ribo_chromIdx  || 0;
+  world.ribo_offset[idx]    = cell.ribo_offset    || 0;
+  world.ribo_holding[idx]   = cell.ribo_holding   || 0;
+  world.ribo_heldOpcode[idx]= cell.ribo_heldOpcode|| 0;
+  world.ribo_searchMode[idx]= cell.ribo_searchMode|| 0;
+  world.ribo_searchByte[idx]= cell.ribo_searchByte|| 0;
+  world.ribo_searchTicks[idx]=cell.ribo_searchTicks||0;
+  world.ribo_tickCounter[idx]=cell.ribo_tickCounter||0;
+
+  // Reset decay countdowns — cell starts fresh in the new world's tick frame.
+  for (let t = 0; t < 64; t++) world.decayNextCyto[idx * 64 + t] = 0;
+  for (let k = 0; k < TOTAL_SUBSLOTS_PER_CELL; k++) world.decayNextSub[idx * TOTAL_SUBSLOTS_PER_CELL + k] = 0;
+}
+
+// Donor side: BFS the local lineage DAG up to `depth` from each requested
+// foreign id (only those whose origin is OUR uuid — anything else, we don't
+// own). Includes ALL parents at each node (full DAG, not just primary).
+function replyLineageFill(req) {
+  const collected = new Map();   // localId -> serialized node
+  const queue = [];
+  for (const f of req.requestedForeignIds || []) {
+    if (f.originWorldUuid !== world.uuid) continue;   // not ours to serve
+    const startId = f.originLocalId;
+    if (lineage.nodes.has(startId)) queue.push({ id: startId, d: 0 });
+  }
+  while (queue.length) {
+    const { id, d } = queue.shift();
+    if (collected.has(id)) continue;
+    const n = lineage.nodes.get(id);
+    if (!n) continue;
+    collected.set(id, _serializeLineageNode(n));
+    if (d >= req.depth) continue;
+    for (const pid of n.parents) if (lineage.nodes.has(pid)) queue.push({ id: pid, d: d + 1 });
+  }
+
+  portalBusSend({
+    type: 'portal-lineage-fill',
+    srcWorldUuid: world.uuid,
+    dstWorldUuid: req.srcWorldUuid,
+    respondsTo: req.msgId,
+    requestedForeignIds: req.requestedForeignIds || [],
+    nodes: [...collected.values()],
+  });
+}
+
+function _serializeLineageNode(n) {
+  return {
+    localId: n.id,
+    parents: n.parents.slice(),
+    data: new Uint8Array(n.data),
+    event: n.event,
+    birthTick: n.birthTick,
+    gen: n.gen | 0,
+    // Preserve multi-hop provenance: if this node came in from somewhere else
+    // before, ship that origin instead of overwriting with ours.
+    originWorldUuid: n.originWorldUuid,
+    originLocalId: n.originLocalId,
+  };
+}
+
+// Receiver side: insert ancestor nodes, build foreign→local remap, wire
+// pending portal-in-pending nodes' parents to the now-imported ancestors.
+function mergeLineageFill(payload) {
+  const fromUuid = payload.srcWorldUuid;
+  const remap = new Map();   // donor's localId -> our localId
+  // Two passes: first allocate IDs (and dedup against foreignIndex), second
+  // rewrite parent arrays.
+  const incoming = payload.nodes || [];
+  for (const n of incoming) {
+    // Origin uuid for this node: if the donor flagged it as already foreign
+    // (multi-hop), keep that; otherwise it originated in the donor's world.
+    const origUuid = n.originWorldUuid || fromUuid;
+    const origLocal = (n.originLocalId != null) ? n.originLocalId : n.localId;
+    const existing = lineageLookupForeign(origUuid, origLocal);
+    if (existing > 0) {
+      remap.set(n.localId, existing);
+      continue;
+    }
+    // Fresh — insert with empty parents (we rewrite next pass).
+    const chrom = new Uint8Array(n.data);
+    const localId = lineageInsertImported(chrom, {
+      parents: [],
+      originWorldUuid: origUuid,
+      originLocalId: origLocal,
+      event: n.event || 'portal-in',
+      birthTick: n.birthTick,
+      gen: n.gen,
+    }, 'free');
+    // Imported ancestors aren't held by any cell on our side — bump down the
+    // cell-pool counter (insertImported defaulted to 'free' so we're fine).
+    remap.set(n.localId, localId);
+  }
+  // Pass 2: rewrite parents for nodes we just inserted, and roll up
+  // descendantsAlive on ancestors. lineageInsertImported's rollup runs at
+  // insert time but parents may not have existed yet, so re-roll once the
+  // wiring is complete.
+  for (const n of incoming) {
+    const localId = remap.get(n.localId);
+    if (!localId) continue;
+    const node = lineage.nodes.get(localId);
+    if (!node) continue;
+    if (!n.parents || !n.parents.length) continue;
+    if (node.parents.length) continue;   // already wired (existing dedup hit)
+    const newParents = [];
+    for (const pid of n.parents) {
+      const lp = remap.get(pid);
+      if (lp && lineage.nodes.has(lp)) newParents.push(lp);
+    }
+    node.parents = newParents;
+    node.primaryParentId = newParents.length ? newParents[0] : -1;
+    for (const pp of newParents) {
+      lineageAddChild(pp, localId);
+      const pn = lineage.nodes.get(pp);
+      if (pn) pn.directChildrenAlive++;
+    }
+    if (newParents.length) {
+      const pn = lineage.nodes.get(newParents[0]);
+      if (pn) node.gen = (pn.gen | 0) + 1;
+      lineageWalkAncestorsAlive(node, +1);
+    }
+  }
+
+  // Promote any pending portal-in-pending nodes whose foreign id appears in
+  // requestedForeignIds and now resolves via foreignIndex.
+  if (payload.respondsTo && portalPending.has(payload.respondsTo)) {
+    const ent = portalPending.get(payload.respondsTo);
+    clearTimeout(ent.timeoutHandle);
+    for (let k = 0; k < ent.pendingLocalIds.length; k++) {
+      const localId = ent.pendingLocalIds[k];
+      const node = lineage.nodes.get(localId);
+      if (!node || node.event !== 'portal-in-pending') continue;
+      // Wire its parents from the donor's view of THIS chromosome's parents.
+      // We didn't store that on send; the fill includes the chromosome itself
+      // as one of its nodes (since requestedForeignIds asked for it). So we
+      // can look up its donor-side node by foreignIndex now.
+      const donorNode = incoming.find(in_ => {
+        const oUuid = in_.originWorldUuid || fromUuid;
+        const oLocal = (in_.originLocalId != null) ? in_.originLocalId : in_.localId;
+        return oUuid === node.originWorldUuid && oLocal === node.originLocalId;
+      });
+      if (donorNode && donorNode.parents) {
+        const newParents = [];
+        for (const pid of donorNode.parents) {
+          const lp = remap.get(pid);
+          if (lp && lineage.nodes.has(lp)) newParents.push(lp);
+        }
+        node.parents = newParents;
+        node.primaryParentId = newParents.length ? newParents[0] : -1;
+        for (const pp of newParents) {
+          lineageAddChild(pp, localId);
+          const pn = lineage.nodes.get(pp);
+          if (pn) pn.directChildrenAlive++;
+        }
+        if (newParents.length) {
+          const pn = lineage.nodes.get(newParents[0]);
+          if (pn) node.gen = (pn.gen | 0) + 1;
+          // Pending node was inserted with empty parents — roll up now.
+          lineageWalkAncestorsAlive(node, +1);
+        }
+      }
+      node.event = 'portal-in';
+    }
+    portalPending.delete(payload.respondsTo);
+  }
+
+  lineage.structVersion++;
+}
+
 // ===== 24_main_loop.js =====
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 Matas Minelga
@@ -7240,6 +8099,10 @@ autoLoadDefaultPreset();
 // MAIN LOOP
 // ============================================================
 initWorld(); resizeCanvas(); resizeLineageCanvas();
+// Multiverse boot — async. Tick loop gate (multiverseReady) blocks ticks until
+// the whois/iam handshake settles a multiverse position. Render still runs so
+// the user sees the canvas + portal strips during the ~250 ms scan window.
+bootMultiverse().catch(e => console.error('bootMultiverse failed:', e));
 window.addEventListener('resize', () => { resizeCanvas(); resizeLineageCanvas(); });
 
 // Resizable splitters for the left lineage panel and the right inspector panel.
@@ -7353,8 +8216,8 @@ let tpsWindowStart = performance.now();
 let currentTps = 0;
 function mainLoop() {
   try {
-    if (running) {
-      for (let i = 0; i < ticksPerFrame; i++) tick();
+    if (running && world.multiverseReady) {
+      for (let i = 0; i < ticksPerFrame; i++) { tick(); multiverseHeartbeatTick(); }
       tpsTicks += ticksPerFrame;
     }
     const nowT = performance.now();

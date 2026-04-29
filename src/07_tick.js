@@ -103,15 +103,41 @@ function tick() {
 
   if (world.tick % CONFIG.lineagePruneInterval === 0) lineagePrune();
 
+  // Portal strip bounds (precomputed per tick — cheap).
+  const W = CONFIG.worldWidth, H = CONFIG.worldHeight;
+  const f = CONFIG.portalStripFrac;
+  const xLo = (1 - f) / 2 * W, xHi = (1 + f) / 2 * W;
+  const yLo = (1 - f) / 2 * H, yHi = (1 + f) / 2 * H;
+  const ngh = world.neighbors;
   for (let i = 0; i < world.maxCells; i++) {
     if (!world.alive[i]) continue;
     world.pos_x[i] += world.vel_x[i]; world.pos_y[i] += world.vel_y[i];
     world.vel_x[i] *= 0.95; world.vel_y[i] *= 0.95;
     const r = world.radius[i];
-    if (world.pos_x[i] < r) { world.pos_x[i] = r; world.vel_x[i] *= -0.5; }
-    if (world.pos_x[i] > CONFIG.worldWidth - r) { world.pos_x[i] = CONFIG.worldWidth - r; world.vel_x[i] *= -0.5; }
-    if (world.pos_y[i] < r) { world.pos_y[i] = r; world.vel_y[i] *= -0.5; }
-    if (world.pos_y[i] > CONFIG.worldHeight - r) { world.pos_y[i] = CONFIG.worldHeight - r; world.vel_y[i] *= -0.5; }
+    // Touching a wall in the middle 30% strip with a neighbor on that side
+    // ejects the cell to that neighbor's opposite-side strip. Otherwise
+    // standard wall-bounce. Order: x-axis walls first, then y-axis. portalEject
+    // frees the slot, so we `continue` past the rest of this cell's checks.
+    if (world.pos_x[i] < r) {
+      if (world.pos_y[i] > yLo && world.pos_y[i] < yHi && ngh && ngh.left
+          && typeof portalEject === 'function' && portalEject(i, 'left')) continue;
+      world.pos_x[i] = r; world.vel_x[i] *= -0.5;
+    }
+    if (world.pos_x[i] > W - r) {
+      if (world.pos_y[i] > yLo && world.pos_y[i] < yHi && ngh && ngh.right
+          && typeof portalEject === 'function' && portalEject(i, 'right')) continue;
+      world.pos_x[i] = W - r; world.vel_x[i] *= -0.5;
+    }
+    if (world.pos_y[i] < r) {
+      if (world.pos_x[i] > xLo && world.pos_x[i] < xHi && ngh && ngh.top
+          && typeof portalEject === 'function' && portalEject(i, 'top')) continue;
+      world.pos_y[i] = r; world.vel_y[i] *= -0.5;
+    }
+    if (world.pos_y[i] > H - r) {
+      if (world.pos_x[i] > xLo && world.pos_x[i] < xHi && ngh && ngh.bottom
+          && typeof portalEject === 'function' && portalEject(i, 'bottom')) continue;
+      world.pos_y[i] = H - r; world.vel_y[i] *= -0.5;
+    }
   }
 
   world.milestones.cellMakingDivider = makingDivider;

@@ -73,6 +73,32 @@ function render() {
   const wtl = worldToScreen(0, 0), wbr = worldToScreen(CONFIG.worldWidth, CONFIG.worldHeight);
   ctx.strokeStyle = '#333'; ctx.strokeRect(wtl.x, wtl.y, wbr.x - wtl.x, wbr.y - wtl.y);
 
+  // Portal strips — middle CONFIG.portalStripFrac of each wall. Active side
+  // (neighbor present) gets world.color; closed side gets a dim gray. The
+  // strip is the visual cue for the portal-touch eject in 07_tick.js.
+  if (world.uuid) {
+    const W = CONFIG.worldWidth, H = CONFIG.worldHeight;
+    const f = CONFIG.portalStripFrac;
+    const lo = (1 - f) / 2, hi = (1 + f) / 2;
+    const xLo = lo * W, xHi = hi * W, xLen = xHi - xLo;
+    const yLo = lo * H, yHi = hi * H, yLen = yHi - yLo;
+    // Strip drawn just inside the wall, ~6 world units thick.
+    const t = 6;
+    const activeFill = world.color || 'hsl(0, 0%, 50%)';
+    const closedFill = 'rgba(80, 80, 80, 0.5)';
+    const drawStrip = (wx, wy, ww, wh, side) => {
+      const tl = worldToScreen(wx, wy), br = worldToScreen(wx + ww, wy + wh);
+      ctx.fillStyle = world.neighbors && world.neighbors[side] ? activeFill : closedFill;
+      ctx.globalAlpha = world.neighbors && world.neighbors[side] ? 0.55 : 0.25;
+      ctx.fillRect(tl.x, tl.y, br.x - tl.x, br.y - tl.y);
+      ctx.globalAlpha = 1;
+    };
+    drawStrip(xLo, 0,         xLen, t,    'top');
+    drawStrip(xLo, H - t,     xLen, t,    'bottom');
+    drawStrip(0,   yLo,       t,    yLen, 'left');
+    drawStrip(W - t, yLo,     t,    yLen, 'right');
+  }
+
   // Debug: spatial-grid bucket heatmap (toggle with B).
   if (showBuckets) {
     const grid = showBuckets === 2 ? world.freePGrid : world.grid;

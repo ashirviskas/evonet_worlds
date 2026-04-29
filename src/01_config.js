@@ -141,4 +141,11 @@ const CONFIG = {
   lineageDegradeCheckpointBytes: 8,       // emit a checkpoint node every N bytes eroded by degrade/digest
   lineageCrossoverMinBytes: 4,            // per-parent contribution to count as crossover vs minor switch
   lineageDebugAssert: false,              // flip on to run lineageAssertInvariants() at the tail of each prune sweep
+
+  // --- Cross-tab portals (multiverse) ---
+  portalStripFrac: 0.30,                  // fraction of each wall (centered) that is a portal; outside the strip the wall bounces
+  portalAncestryDepth: 50,                // BFS depth cap when serving portal-lineage-fill requests
+  portalHeartbeatTicks: 600,              // ticks between iam heartbeats (~10 s at 60 tps)
+  portalFillTimeoutMs: 5000,              // ms a receiver waits for portal-lineage-fill before orphaning pending nodes
+  portalBootScanMs: 250,                  // ms a booting tab listens for iam replies before placing itself
 };

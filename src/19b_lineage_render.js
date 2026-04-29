@@ -165,6 +165,12 @@ function edgeColorForEvent(event, isMain) {
     case 'degrade-checkpoint': return isMain ? 'rgba(210,110,80,0.8)'  : 'rgba(180,90,60,0.35)';
     case 'digest-checkpoint':  return isMain ? 'rgba(220,100,150,0.8)' : 'rgba(180,80,120,0.35)';
     case 'clone':              return isMain ? 'rgba(200,200,200,0.8)' : 'rgba(170,170,170,0.35)';
+    // Cross-tab portal events (see 23e_portal_lineage.js for lifecycle).
+    case 'portal-out':         return isMain ? 'rgba(255,140,60,0.85)' : 'rgba(220,110,40,0.35)';   // donor leaf — orange
+    case 'portal-in':          return isMain ? 'rgba(80,200,200,0.85)' : 'rgba(60,160,160,0.35)';   // arrived w/ ancestry — teal
+    case 'portal-in-pending':  return isMain ? 'rgba(220,200,80,0.85)' : 'rgba(180,160,60,0.35)';   // awaiting fill — yellow
+    case 'portal-in-orphan':   return isMain ? 'rgba(180,90,90,0.85)'  : 'rgba(140,60,60,0.35)';    // donor closed — dim red
+    case 'portal-revisit':     return isMain ? 'rgba(190,130,230,0.85)': 'rgba(150,100,190,0.35)';  // round-trip — purple
     case 'replicase':
     default:                   return isMain ? 'rgba(120,200,255,0.8)' : 'rgba(120,200,255,0.3)';
   }

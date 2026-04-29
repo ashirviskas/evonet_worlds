@@ -25,6 +25,11 @@ const lineage = {
   prunedSafetyDrops: 0,
   collapsedMerges: 0,
   ghostParentsRepaired: 0,       // debug: times getLineageId followed a redirect chain
+  // Cross-tab portal index — "originWorldUuid:originLocalId" -> localId for
+  // every node that arrived from another world. Lets catch/fill paths dedup
+  // on foreign identity without scanning all nodes. Populated only by
+  // 23e_portal_lineage.js's import path; cleared in lineageReset.
+  foreignIndex: new Map(),
 };
 
 function lineageHashPrefix(u8) {
@@ -226,6 +231,87 @@ function lineageWalkAncestorsAlive(node, delta) {
   }
 }
 
+// Insert a node that arrived from another world via a portal. Bypasses the
+// dedup paths in assignLineage — the donor already gave us a fully-formed
+// identity (origin uuid + originLocalId) and we mint a fresh local id, so
+// foreign nodes never collide with locally-born nodes. parents must already
+// be rewritten to LOCAL ids by the caller. Returns the new local id.
+//
+// chrom: Uint8Array carrying the chromosome bytes (held by a cell or free pool).
+// fields: { parents, originWorldUuid, originLocalId, event, birthTick?, gen?,
+//           srcWorldUuid?, srcTick?, copies?, copiesInCells?, copiesInFree? }.
+// holder: 'cell' | 'free' (drives the live-pool counter).
+function lineageInsertImported(chrom, fields, holder) {
+  const id = lineage.nextId++;
+  const parentsArr = Array.isArray(fields.parents) ? fields.parents.filter(p => p > 0 && lineage.nodes.has(p)) : [];
+  const node = {
+    id,
+    parents: parentsArr,
+    parentBytes: null,
+    shape: chromosomeShape(chrom),
+    length: chrom.length,
+    hashPrefix: lineageHashPrefix(chrom),
+    data: new Uint8Array(chrom),
+    birthTick: fields.birthTick != null ? fields.birthTick : world.tick,
+    event: fields.event || 'portal-in',
+    alive: 1,
+    copies: fields.copies != null ? fields.copies : 1,
+    copiesInCells: holder === 'cell' ? 1 : 0,
+    copiesInFree:  holder === 'free' ? 1 : 0,
+    copiesEver: 1,
+    directChildrenAlive: 0,
+    descendantsEver: 0,
+    descendantsAlive: 0,
+    contributesToDescendants: true,
+    deathTick: 0,
+    mergedCount: 0,
+    primaryParentId: parentsArr.length ? parentsArr[0] : -1,
+    gen: fields.gen != null ? fields.gen : 0,
+    // Portal provenance:
+    originWorldUuid: fields.originWorldUuid,
+    originLocalId: fields.originLocalId,
+    srcWorldUuid: fields.srcWorldUuid,
+    srcTick: fields.srcTick,
+  };
+  lineage.nodes.set(id, node);
+  lineage.chromToId.set(chrom, id);
+  if (fields.originWorldUuid && fields.originLocalId != null) {
+    lineage.foreignIndex.set(`${fields.originWorldUuid}:${fields.originLocalId}`, id);
+  }
+  if (node.primaryParentId > 0 && node.gen === 0) {
+    const pn = lineage.nodes.get(node.primaryParentId);
+    if (pn) node.gen = (pn.gen | 0) + 1;
+  }
+  for (const pid of parentsArr) {
+    lineageAddChild(pid, id);
+    const pn = lineage.nodes.get(pid);
+    if (pn) pn.directChildrenAlive++;
+  }
+  // Ancestor descendantsAlive rollup (DAG-safe).
+  const seen = new Set();
+  const stack = parentsArr.slice();
+  while (stack.length) {
+    const pid = stack.pop();
+    if (seen.has(pid)) continue;
+    seen.add(pid);
+    const pn = lineage.nodes.get(pid);
+    if (!pn) continue;
+    pn.descendantsEver++;
+    pn.descendantsAlive = (pn.descendantsAlive || 0) + 1;
+    for (const gp of pn.parents) stack.push(gp);
+  }
+  lineage.structVersion++;
+  return id;
+}
+
+// Lookup: have we seen this foreign chromosome before?
+// Returns the local id if yes, -1 if no.
+function lineageLookupForeign(originWorldUuid, originLocalId) {
+  if (!originWorldUuid || originLocalId == null) return -1;
+  const id = lineage.foreignIndex.get(`${originWorldUuid}:${originLocalId}`);
+  return (id && lineage.nodes.has(id)) ? id : -1;
+}
+
 function getLineageId(chrom) {
   if (!chrom) return -1;
   let id = lineage.chromToId.get(chrom);
@@ -255,6 +341,7 @@ function lineageReset() {
   lineage.children.clear();
   lineage.chromToId = new WeakMap();
   lineage.redirects.clear();
+  lineage.foreignIndex.clear();
   lineage.structVersion++;
   lineage.prunedSafetyDrops = 0;
   lineage.collapsedMerges = 0;

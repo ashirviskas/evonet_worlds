@@ -88,6 +88,18 @@ const world = {
     threeGenLineage: 0, cellSurvived10k: 0, maxPopulation: 0, cellMoved: 0, photonsAbsorbed: 0,
     freePSpawned: 0, freeChromSpawned: 0, replicaseCompleted: 0, replicaseFailed: 0,
     membraneDivisions: 0, chromAbsorptions: 0, chromEjections: 0 },
+
+  // --- Multiverse / cross-tab portals (set up by 23c_multiverse.js). ---
+  // uuid + color identify this tab session. multiverseX/Y are integer coords
+  // assigned at boot via the whois/iam handshake. neighbors[side] is the uuid
+  // of the world adjacent on that side, or null. knownWorlds is the full
+  // {uuid → {mx,my,color,lastSeenTick}} table for the upcoming multiverse
+  // view; populated by iam messages and pruned on bye/heartbeat-timeout.
+  uuid: null, color: null,
+  multiverseX: 0, multiverseY: 0,
+  neighbors: { left: null, right: null, top: null, bottom: null },
+  knownWorlds: null,
+  multiverseReady: false,
 };
 
 const TOTAL_SUBSLOTS_PER_CELL = NUM_SLOTS * NUM_SUBSLOTS; // 70
@@ -240,9 +252,13 @@ function initWorld() {
   }
 }
 
+function _findFreeSlot() {
+  for (let i = 0; i < world.maxCells; i++) { if (!world.alive[i]) return i; }
+  return -1;
+}
+
 function spawnCell(x, y, parentId, generation, radiusOverride) {
-  let idx = -1;
-  for (let i = 0; i < world.maxCells; i++) { if (!world.alive[i]) { idx = i; break; } }
+  const idx = _findFreeSlot();
   if (idx === -1) return -1;
 
   world.alive[idx] = 1;
