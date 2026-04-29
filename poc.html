@@ -76,6 +76,9 @@ canvas { display: block; width: 100%; height: 100%; }
 #protein-legend { position: fixed; bottom: 0; left: 320px; right: 340px; max-height: 40vh; background: rgba(20,20,20,0.95); border-top: 1px solid #333; display: flex; flex-wrap: wrap; align-items: center; padding: 2px 8px; gap: 2px; overflow-y: auto; z-index: 10; }
 .legend-swatch { width: 18px; height: 18px; border-radius: 3px; display: flex; align-items: center; justify-content: center; font-size: 8px; cursor: default; flex-shrink: 0; border: 1px solid rgba(255,255,255,0.15); }
 #milestones { position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.6); padding: 10px 14px; border-radius: 6px; font-size: 11px; line-height: 1.6; z-index: 5; pointer-events: none; min-width: 260px; }
+.stats-chart-block { display: flex; flex-direction: column; gap: 2px; }
+.stats-chart-title { font-size: 10px; color: #8cf; font-family: monospace; }
+.stats-chart { background: #0a0a0a; border: 1px solid #333; border-radius: 3px; width: 100%; height: auto; display: block; }
 .ms-check { color: #5f5; }
 .ms-uncheck { color: #555; }
 .ms-count { color: #aaa; font-size: 10px; }
@@ -109,6 +112,7 @@ canvas { display: block; width: 100%; height: 100%; }
     <button id="btn-restart">Restart</button>
     <button id="btn-save-world">Save World</button>
     <button id="btn-load-world">Load World</button>
+    <button id="btn-stats" title="Toggle the per-world stats popup (population, energy, chromosome lineages over time)">Stats</button>
     <input type="file" id="file-load-world" accept=".json" style="display:none">
     <div id="speed-container">
       <label>Speed:</label>
@@ -128,7 +132,20 @@ canvas { display: block; width: 100%; height: 100%; }
       <input type="checkbox" id="render-toggle" checked> Render
     </label>
   </div>
+  <div id="world-identity" style="display:flex; align-items:center; gap:6px; font-size:11px; padding:4px 6px; background:#222; border-radius:3px;">
+    <span id="world-color-swatch" style="width:14px; height:14px; border-radius:3px; border:1px solid #444; flex-shrink:0;"></span>
+    <span style="color:#888;">world</span>
+    <span id="world-id-text" style="color:#ddd; font-family:monospace;">…</span>
+    <span id="world-coord-text" style="color:#888; margin-left:auto;"></span>
+  </div>
   <div id="stats"></div>
+  <div id="multiverse-viewer" style="border-top:1px solid #333; padding-top:8px; display:flex; flex-direction:column; gap:6px;">
+    <b style="color:#8cf;">Multiverse</b>
+    <canvas id="multiverse-topo" width="320" height="160" style="background:#0a0a0a; border:1px solid #333; border-radius:3px;"></canvas>
+    <div id="multiverse-crossings" style="font-size:11px; line-height:1.5;"></div>
+    <div id="multiverse-worlds" style="font-size:10px; display:flex; flex-direction:column; gap:6px;"></div>
+    <div id="multiverse-log" style="font-size:10px; color:#aaa; max-height:120px; overflow-y:auto; font-family:monospace;"></div>
+  </div>
   <div id="cell-actions" style="display:flex; gap:6px; flex-wrap:wrap;">
     <button id="btn-copy-genome">Copy Genome</button>
     <button id="btn-divide">Force Divide</button>
@@ -307,6 +324,7 @@ canvas { display: block; width: 100%; height: 100%; }
     Evonet Worlds &copy; 2026 Matas Minelga &middot;
     <a href="https://github.com/ashirviskas/evonet_worlds" target="_blank" rel="noopener" style="color:#8cf;">Source</a> &middot;
     <a href="https://www.gnu.org/licenses/agpl-3.0.html" target="_blank" rel="noopener" style="color:#8cf;">AGPL-3.0</a>
+    <div id="build-stamp" style="margin-top:4px; font-family:monospace; color:#666;"></div>
   </div>
 </div>
 <div id="protein-legend"></div>
@@ -351,6 +369,44 @@ canvas { display: block; width: 100%; height: 100%; }
   </div>
 </div>
 
+<!-- World Stats Popup -->
+<div id="stats-popup" style="display:none; position:fixed; right:360px; top:60px; width:520px; height:560px; background:#1a1a1a; border:1px solid #555; border-radius:6px; z-index:160; box-shadow:0 4px 16px rgba(0,0,0,0.7); flex-direction:column; resize:both; overflow:hidden;">
+  <div id="stats-popup-titlebar" style="cursor:move; padding:6px 10px; background:#223; display:flex; align-items:center; gap:8px; user-select:none; flex-shrink:0;">
+    <span style="color:#8cf; font-weight:bold; font-size:12px;">World Stats</span>
+    <span id="stats-popup-id" style="color:#888; font-size:10px; font-family:monospace;"></span>
+    <label style="margin-left:auto; font-size:10px; color:#bbb; display:flex; align-items:center; gap:4px;">
+      <input type="checkbox" id="stats-sampling-toggle" checked> sampling
+    </label>
+    <button id="stats-popup-close" style="background:#333; color:#ddd; border:1px solid #555; padding:1px 6px; cursor:pointer; font-size:10px; border-radius:3px;">✕</button>
+  </div>
+  <div id="stats-popup-body" style="overflow:auto; flex:1; padding:8px; display:flex; flex-direction:column; gap:10px;">
+    <div class="stats-chart-block">
+      <div class="stats-chart-title">Population (cells)</div>
+      <canvas class="stats-chart" data-key="numCells" width="500" height="80"></canvas>
+    </div>
+    <div class="stats-chart-block">
+      <div class="stats-chart-title">Total energy</div>
+      <canvas class="stats-chart" data-key="totalEnergy" width="500" height="80"></canvas>
+    </div>
+    <div class="stats-chart-block">
+      <div class="stats-chart-title">Avg energy / cell</div>
+      <canvas class="stats-chart" data-key="avgEnergy" width="500" height="60"></canvas>
+    </div>
+    <div class="stats-chart-block">
+      <div class="stats-chart-title">Free proteins / free chromosomes / photons</div>
+      <canvas class="stats-chart" data-keys="freeP,freeChrom,photons" data-colors="#8cf,#fc8,#ff8" width="500" height="80"></canvas>
+    </div>
+    <div class="stats-chart-block">
+      <div class="stats-chart-title">Top chromosome lineages (live copies, stacked)</div>
+      <canvas id="stats-chart-chromosomes" width="500" height="120"></canvas>
+      <div id="stats-chart-chrom-legend" style="font-size:9px; display:flex; flex-wrap:wrap; gap:4px; margin-top:4px;"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const BUILD_INFO = Object.freeze({ commit: "954db05-dirty", builtAt: "2026-04-29T14:22:37+00:00" });
+</script>
 <script>
 // ===== 00_tooltip.js =====
 // SPDX-License-Identifier: AGPL-3.0-or-later
@@ -537,6 +593,14 @@ const CONFIG = {
   portalHeartbeatTicks: 600,              // ticks between iam heartbeats (~10 s at 60 tps)
   portalFillTimeoutMs: 5000,              // ms a receiver waits for portal-lineage-fill before orphaning pending nodes
   portalBootScanMs: 250,                  // ms a booting tab listens for iam replies before placing itself
+  multiverseStatsTicks: 60,               // ticks between world-stats heartbeat broadcasts (~1 s at 60 tps)
+  multiverseStatsHistory: 120,            // rolling per-world stats samples kept for the multiverse viewer (~2 min at 1 Hz)
+  multiverseRecentLogCap: 32,             // recent-crossing log size in the multiverse viewer
+
+  // --- World stats history (per-world stats popup) ---
+  worldStatsSampleTicks: 30,              // ticks between local stats snapshots for the per-world stats popup
+  worldStatsHistory: 600,                 // rolling samples kept locally (denser than multiverse heartbeat)
+  worldStatsTopChromosomes: 8,            // number of distinct chromosome lineages tracked in the per-chromosome chart
 };
 
 // ===== 02_protein_info.js =====
@@ -1028,6 +1092,23 @@ const world = {
   neighbors: { left: null, right: null, top: null, bottom: null },
   knownWorlds: null,
   multiverseReady: false,
+
+  // Portal traffic counters and recent-crossing log — fed by 23e_portal_lineage.js
+  // and rendered by 20c_multiverse_viewer.js. Lifetime per-side counts; recent
+  // is a rolling buffer capped at CONFIG.multiverseRecentLogCap.
+  portalCrossings: {
+    in:  { left: 0, right: 0, top: 0, bottom: 0 },
+    out: { left: 0, right: 0, top: 0, bottom: 0 },
+    recent: [],
+  },
+  // Heartbeat-cadence stats samples for self (mirrors what we receive from
+  // remote worlds via multiverseObserveStats). Used by the multiverse viewer
+  // sparklines so self appears uniformly with remotes.
+  statsHistory: [],
+  // Denser local stats samples (population, energy, per-chromosome counts)
+  // for the dedicated stats popup. Sampling can be paused via worldStatsEnabled.
+  worldStatsHistory: [],
+  worldStatsEnabled: true,
 };
 
 const TOTAL_SUBSLOTS_PER_CELL = NUM_SLOTS * NUM_SUBSLOTS; // 70
@@ -6444,6 +6525,665 @@ async function loadWorldFromFile(file) {
   console.log(`Loaded world  ·  tick ${world.tick}  ·  ${world.numCells} cells  ·  ${lineage.nodes.size} lineage nodes`);
 }
 
+// ===== 20c_multiverse_viewer.js =====
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Matas Minelga
+// ============================================================
+// MULTIVERSE VIEWER — right-panel UI for the multiverse topology,
+// portal traffic counters, recent-crossing log, and per-world stats
+// sparklines. Pure DOM/canvas painters — never mutates sim state.
+//
+// Data sources:
+//   world.uuid / world.color / world.multiverseX/Y       — self identity
+//   world.knownWorlds: Map<uuid, {mx,my,color,lastSeenTick,statsHistory?}>
+//   world.statsHistory                                   — self-broadcast samples
+//   world.portalCrossings                                — per-side counters + recent log
+//   BUILD_INFO (global, defined by build.py)             — version stamp
+// ============================================================
+
+(function () {
+  // ---- Identity row + build stamp -------------------------------------------
+
+  function updateWorldIdentity() {
+    const swatch = document.getElementById('world-color-swatch');
+    const idText = document.getElementById('world-id-text');
+    const coordText = document.getElementById('world-coord-text');
+    if (!swatch || !idText || !coordText) return;
+    if (world.color) swatch.style.background = world.color;
+    idText.textContent = world.uuid ? world.uuid.slice(0, 8) : '…';
+    coordText.textContent = world.multiverseReady
+      ? `(${world.multiverseX}, ${world.multiverseY})`
+      : '';
+  }
+
+  function updateBuildStamp() {
+    const el = document.getElementById('build-stamp');
+    if (!el) return;
+    if (typeof BUILD_INFO !== 'undefined' && BUILD_INFO) {
+      el.textContent = `build: ${BUILD_INFO.commit} · ${BUILD_INFO.builtAt}`;
+    } else {
+      el.textContent = 'build: dev';
+    }
+  }
+
+  // ---- Topology canvas ------------------------------------------------------
+
+  function _drawMultiverseTopology(canvas) {
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width, h = canvas.height;
+    ctx.fillStyle = '#0a0a0a';
+    ctx.fillRect(0, 0, w, h);
+
+    if (!world.uuid) return;
+
+    const cells = [];
+    cells.push({
+      uuid: world.uuid, mx: world.multiverseX | 0, my: world.multiverseY | 0,
+      color: world.color || '#888', isSelf: true,
+    });
+    if (world.knownWorlds) {
+      for (const [uuid, e] of world.knownWorlds) {
+        cells.push({ uuid, mx: e.mx | 0, my: e.my | 0, color: e.color || '#888', isSelf: false });
+      }
+    }
+
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const c of cells) {
+      if (c.mx < minX) minX = c.mx;
+      if (c.mx > maxX) maxX = c.mx;
+      if (c.my < minY) minY = c.my;
+      if (c.my > maxY) maxY = c.my;
+    }
+    const gridW = (maxX - minX) + 1;
+    const gridH = (maxY - minY) + 1;
+    const margin = 14;
+    const cellSizePx = Math.max(20, Math.min(48,
+      Math.floor(Math.min((w - margin * 2) / gridW, (h - margin * 2) / gridH))));
+    const offsetX = Math.floor((w - cellSizePx * gridW) / 2);
+    const offsetY = Math.floor((h - cellSizePx * gridH) / 2);
+    const cellPos = (mx, my) => ({
+      cx: offsetX + (mx - minX) * cellSizePx + cellSizePx / 2,
+      cy: offsetY + (my - minY) * cellSizePx + cellSizePx / 2,
+    });
+
+    // Edges between adjacent cells (manhattan distance == 1).
+    ctx.lineWidth = 2;
+    for (let i = 0; i < cells.length; i++) {
+      for (let j = i + 1; j < cells.length; j++) {
+        const a = cells[i], b = cells[j];
+        if (Math.abs(a.mx - b.mx) + Math.abs(a.my - b.my) !== 1) continue;
+        const pa = cellPos(a.mx, a.my), pb = cellPos(b.mx, b.my);
+        ctx.strokeStyle = '#666';
+        ctx.beginPath();
+        ctx.moveTo(pa.cx, pa.cy);
+        ctx.lineTo(pb.cx, pb.cy);
+        ctx.stroke();
+      }
+    }
+
+    // Tiles.
+    const tileSize = Math.floor(cellSizePx * 0.7);
+    for (const c of cells) {
+      const p = cellPos(c.mx, c.my);
+      ctx.fillStyle = c.color;
+      ctx.fillRect(p.cx - tileSize / 2, p.cy - tileSize / 2, tileSize, tileSize);
+      if (c.isSelf) {
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(p.cx - tileSize / 2 - 1, p.cy - tileSize / 2 - 1, tileSize + 2, tileSize + 2);
+      }
+      ctx.fillStyle = '#000';
+      ctx.font = 'bold 9px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(c.uuid.slice(0, 4), p.cx, p.cy);
+    }
+  }
+
+  // ---- Sparkline (used in per-world rows) -----------------------------------
+
+  function _drawSparkline(canvas, samples, key, color) {
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width, h = canvas.height;
+    ctx.fillStyle = '#0a0a0a';
+    ctx.fillRect(0, 0, w, h);
+    if (!samples || samples.length < 2) return;
+    let minV = Infinity, maxV = -Infinity;
+    for (const s of samples) {
+      const v = +s[key] || 0;
+      if (v < minV) minV = v;
+      if (v > maxV) maxV = v;
+    }
+    if (!isFinite(minV) || !isFinite(maxV)) return;
+    if (maxV === minV) maxV = minV + 1;
+    ctx.strokeStyle = color || '#8cf';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let i = 0; i < samples.length; i++) {
+      const v = +samples[i][key] || 0;
+      const x = (i / (samples.length - 1)) * (w - 2) + 1;
+      const y = h - 1 - ((v - minV) / (maxV - minV)) * (h - 2);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+
+  // ---- Crossings text + recent log ------------------------------------------
+
+  const SIDE_ARROW = { left: '←', right: '→', top: '↑', bottom: '↓' };
+
+  function _renderCrossings() {
+    const el = document.getElementById('multiverse-crossings');
+    if (!el) return;
+    const c = world.portalCrossings;
+    if (!c) { el.innerHTML = ''; return; }
+    const parts = [];
+    for (const side of ['left', 'right', 'top', 'bottom']) {
+      const inN = c.in[side] | 0, outN = c.out[side] | 0;
+      const dim = (inN + outN) === 0;
+      parts.push(
+        `<div style="opacity:${dim ? 0.5 : 1};">` +
+        `<span style="color:#8cf;">${SIDE_ARROW[side]} ${side}</span> ` +
+        `<span style="color:#bbb;">in: ${inN}</span> ` +
+        `<span style="color:#bbb;">out: ${outN}</span>` +
+        `</div>`
+      );
+    }
+    el.innerHTML = parts.join('');
+  }
+
+  function _renderRecentLog() {
+    const el = document.getElementById('multiverse-log');
+    if (!el) return;
+    const c = world.portalCrossings;
+    if (!c || !c.recent.length) { el.innerHTML = '<span style="color:#555;">no crossings yet</span>'; return; }
+    const lines = [];
+    for (let i = c.recent.length - 1; i >= 0; i--) {
+      const r = c.recent[i];
+      const arrow = r.dir === 'out' ? '→' : '←';
+      const peer = r.peerUuid ? r.peerUuid.slice(0, 8) : '?';
+      const color = r.dir === 'out' ? '#fc8' : '#8cf';
+      lines.push(
+        `<div>` +
+        `<span style="color:#666;">t=${r.tick}</span> ` +
+        `<span style="color:${color};">${r.dir} ${arrow} ${r.side}</span> ` +
+        `<span style="color:#aaa;">peer=${peer}</span>` +
+        `</div>`
+      );
+    }
+    el.innerHTML = lines.join('');
+  }
+
+  // ---- Per-world rows (color swatch + uuid + (mx,my) + sparkline) -----------
+
+  function _renderWorldList() {
+    const el = document.getElementById('multiverse-worlds');
+    if (!el) return;
+
+    // Build a stable, sorted list (self first, then known worlds by mx,my).
+    const rows = [];
+    if (world.uuid) {
+      rows.push({
+        uuid: world.uuid,
+        mx: world.multiverseX | 0, my: world.multiverseY | 0,
+        color: world.color || '#888',
+        isSelf: true,
+        samples: world.statsHistory,
+        lastSeenTick: world.tick,
+      });
+    }
+    if (world.knownWorlds) {
+      const remotes = [];
+      for (const [uuid, e] of world.knownWorlds) {
+        remotes.push({
+          uuid, mx: e.mx | 0, my: e.my | 0,
+          color: e.color || '#888',
+          isSelf: false,
+          samples: e.statsHistory || [],
+          lastSeenTick: e.lastSeenTick | 0,
+        });
+      }
+      remotes.sort((a, b) => a.my - b.my || a.mx - b.mx || a.uuid.localeCompare(b.uuid));
+      rows.push(...remotes);
+    }
+
+    // Diff-by-uuid: rebuild only when the uuid set changed; else update inner
+    // text / sparkline canvases in place. Cheap and avoids dom thrash.
+    const existing = new Map();
+    for (const node of el.children) existing.set(node.dataset.uuid, node);
+    const newSet = new Set(rows.map(r => r.uuid));
+    for (const [uuid, node] of existing) {
+      if (!newSet.has(uuid)) el.removeChild(node);
+    }
+
+    for (const r of rows) {
+      let node = existing.get(r.uuid);
+      if (!node) {
+        node = document.createElement('div');
+        node.dataset.uuid = r.uuid;
+        node.style.cssText = 'display:flex; align-items:center; gap:6px; padding:2px 4px; background:#161616; border-radius:3px;';
+        node.innerHTML =
+          `<span class="mvw-swatch" style="width:12px; height:12px; border-radius:2px; flex-shrink:0;"></span>` +
+          `<span class="mvw-id" style="color:#ddd; font-family:monospace; font-size:10px;"></span>` +
+          `<span class="mvw-coord" style="color:#888; font-size:10px;"></span>` +
+          `<span class="mvw-pop" style="color:#bbb; font-size:10px; margin-left:6px;"></span>` +
+          `<canvas class="mvw-spark" width="80" height="20" style="margin-left:auto; background:#0a0a0a; border:1px solid #222; border-radius:2px;"></canvas>` +
+          `<span class="mvw-age" style="color:#666; font-size:9px;"></span>`;
+        el.appendChild(node);
+      }
+      const swatch = node.querySelector('.mvw-swatch');
+      swatch.style.background = r.color;
+      swatch.style.border = r.isSelf ? '1px solid #fff' : '1px solid #333';
+      node.querySelector('.mvw-id').textContent = r.uuid.slice(0, 8) + (r.isSelf ? ' (self)' : '');
+      node.querySelector('.mvw-coord').textContent = `(${r.mx},${r.my})`;
+      const last = r.samples && r.samples.length ? r.samples[r.samples.length - 1] : null;
+      node.querySelector('.mvw-pop').textContent = last ? `pop ${last.numCells}` : 'pop —';
+      _drawSparkline(node.querySelector('.mvw-spark'), r.samples, 'numCells', r.color);
+      const ageTicks = world.tick - (r.lastSeenTick | 0);
+      node.querySelector('.mvw-age').textContent = r.isSelf
+        ? ''
+        : (ageTicks >= 0 ? `${ageTicks}t ago` : '');
+    }
+  }
+
+  // ---- Public update API ----------------------------------------------------
+
+  function updateMultiverseViewer() {
+    updateWorldIdentity();
+    const topo = document.getElementById('multiverse-topo');
+    if (topo) _drawMultiverseTopology(topo);
+    _renderCrossings();
+    _renderWorldList();
+    _renderRecentLog();
+  }
+
+  // Expose to the global scope (matches the no-module convention used across
+  // the rest of the bundle — see README "How the JS is stitched").
+  window.updateWorldIdentity = updateWorldIdentity;
+  window.updateBuildStamp = updateBuildStamp;
+  window.updateMultiverseViewer = updateMultiverseViewer;
+})();
+
+// ===== 20d_world_stats.js =====
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Matas Minelga
+// ============================================================
+// WORLD STATS — local high-cadence sampler + popup with charts.
+// Population, energy, free pools, and per-chromosome-lineage live counts
+// are sampled every CONFIG.worldStatsSampleTicks ticks into
+// world.worldStatsHistory. The popup (#stats-popup) draws line + stacked
+// area charts off that buffer; sampling is gated on world.worldStatsEnabled
+// so when the popup is hidden you can pause to save CPU.
+// ============================================================
+
+(function () {
+  // ---- Sampler --------------------------------------------------------------
+
+  function _countChromosomeLineages() {
+    // Returns Map<lineageId, liveCellCount>. Counts each cell once per distinct
+    // chromosome lineage in its genome (so a cell with 2 copies of the same
+    // chromosome lid contributes 1 to that lid).
+    const counts = new Map();
+    for (let i = 0; i < world.maxCells; i++) {
+      if (!world.alive[i]) continue;
+      const g = world.genomes[i];
+      if (!g) continue;
+      const seenInCell = new Set();
+      for (let c = 0; c < g.length; c++) {
+        const lid = getLineageId(g[c]);
+        if (lid <= 0 || seenInCell.has(lid)) continue;
+        seenInCell.add(lid);
+        counts.set(lid, (counts.get(lid) || 0) + 1);
+      }
+    }
+    return counts;
+  }
+
+  function worldStatsSampleTick() {
+    if (!world.worldStatsEnabled) return;
+    if ((world.tick % CONFIG.worldStatsSampleTicks) !== 0) return;
+
+    let n = 0, totalE = 0;
+    for (let i = 0; i < world.maxCells; i++) {
+      if (world.alive[i]) { n++; totalE += world.energy[i]; }
+    }
+    const m = world.milestones || {};
+    const sample = {
+      tick: world.tick,
+      ts: Date.now(),
+      numCells: n,
+      totalEnergy: totalE,
+      avgEnergy: n ? totalE / n : 0,
+      photons: world.photonCount | 0,
+      freeP: world.freePCount | 0,
+      freeChrom: world.freeChromosomes ? world.freeChromosomes.length : 0,
+      replicaseOk: m.replicaseCompleted | 0,
+      replicaseFail: m.replicaseFailed | 0,
+      membDivisions: m.membraneDivisions | 0,
+      chromAbsorptions: m.chromAbsorptions | 0,
+      chromCounts: _countChromosomeLineages(),
+    };
+    world.worldStatsHistory.push(sample);
+    const cap = CONFIG.worldStatsHistory;
+    if (world.worldStatsHistory.length > cap) {
+      world.worldStatsHistory.splice(0, world.worldStatsHistory.length - cap);
+    }
+  }
+
+  // ---- Chart drawers --------------------------------------------------------
+
+  function _formatNum(v) {
+    if (v >= 1e6) return (v / 1e6).toFixed(1) + 'M';
+    if (v >= 1e3) return (v / 1e3).toFixed(1) + 'k';
+    if (Number.isInteger(v)) return String(v);
+    return v.toFixed(1);
+  }
+
+  function _drawAxisAndLabel(ctx, w, h, maxV, currentLabel, color) {
+    ctx.fillStyle = '#0a0a0a';
+    ctx.fillRect(0, 0, w, h);
+    // y=0 baseline.
+    ctx.strokeStyle = '#222';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, h - 0.5);
+    ctx.lineTo(w, h - 0.5);
+    ctx.stroke();
+    // max-value marker line.
+    ctx.fillStyle = '#666';
+    ctx.font = '9px monospace';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillText(_formatNum(maxV), 2, 2);
+    // Current value at right.
+    if (currentLabel != null) {
+      ctx.fillStyle = color || '#8cf';
+      ctx.textAlign = 'right';
+      ctx.fillText(currentLabel, w - 4, 2);
+    }
+  }
+
+  function _drawStatsLine(canvas, samples, key, color) {
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width, h = canvas.height;
+    if (!samples || samples.length < 2) {
+      _drawAxisAndLabel(ctx, w, h, 0, '—', color);
+      return;
+    }
+    let maxV = 0;
+    for (const s of samples) {
+      const v = +s[key] || 0;
+      if (v > maxV) maxV = v;
+    }
+    if (maxV === 0) maxV = 1;
+    const last = samples[samples.length - 1];
+    const lastV = +last[key] || 0;
+    _drawAxisAndLabel(ctx, w, h, maxV, _formatNum(lastV), color);
+    ctx.strokeStyle = color || '#8cf';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    for (let i = 0; i < samples.length; i++) {
+      const v = +samples[i][key] || 0;
+      const x = (i / (samples.length - 1)) * (w - 2) + 1;
+      const y = h - 1 - (v / maxV) * (h - 14);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+
+  function _drawStatsMulti(canvas, samples, keys, colors) {
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width, h = canvas.height;
+    if (!samples || samples.length < 2) {
+      _drawAxisAndLabel(ctx, w, h, 0, '—', '#bbb');
+      return;
+    }
+    let maxV = 0;
+    for (const s of samples) {
+      for (const k of keys) {
+        const v = +s[k] || 0;
+        if (v > maxV) maxV = v;
+      }
+    }
+    if (maxV === 0) maxV = 1;
+    _drawAxisAndLabel(ctx, w, h, maxV, '', '#bbb');
+    for (let kI = 0; kI < keys.length; kI++) {
+      const k = keys[kI];
+      ctx.strokeStyle = colors[kI] || '#8cf';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      for (let i = 0; i < samples.length; i++) {
+        const v = +samples[i][k] || 0;
+        const x = (i / (samples.length - 1)) * (w - 2) + 1;
+        const y = h - 1 - (v / maxV) * (h - 14);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+    // Legend.
+    ctx.font = '9px monospace';
+    ctx.textBaseline = 'top';
+    let xOff = 4;
+    for (let kI = 0; kI < keys.length; kI++) {
+      ctx.fillStyle = colors[kI] || '#8cf';
+      const label = keys[kI];
+      ctx.fillRect(xOff, 14, 8, 2);
+      ctx.fillText(label, xOff + 12, 11);
+      xOff += 16 + ctx.measureText(label).width;
+    }
+  }
+
+  function _lidColor(lid) {
+    return `hsl(${(lid * 47) % 360}, 65%, 55%)`;
+  }
+
+  function _selectTopLineages(samples, k) {
+    // Union of top-K lineages from each sample, ranked by max count seen.
+    // Keeps the same set persistent across redraws so colors don't reshuffle
+    // between frames.
+    const peakByLid = new Map();
+    for (const s of samples) {
+      if (!s.chromCounts) continue;
+      for (const [lid, count] of s.chromCounts) {
+        const prev = peakByLid.get(lid) || 0;
+        if (count > prev) peakByLid.set(lid, count);
+      }
+    }
+    const sorted = [...peakByLid.entries()].sort((a, b) => b[1] - a[1]);
+    return sorted.slice(0, k).map(e => e[0]);
+  }
+
+  function _drawStatsChromosomes(canvas, samples) {
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width, h = canvas.height;
+    ctx.fillStyle = '#0a0a0a';
+    ctx.fillRect(0, 0, w, h);
+    if (!samples || samples.length < 2) {
+      _drawAxisAndLabel(ctx, w, h, 0, '—', '#bbb');
+      _renderChromosomeLegend([]);
+      return;
+    }
+    const topLids = _selectTopLineages(samples, CONFIG.worldStatsTopChromosomes);
+    const topSet = new Set(topLids);
+
+    // Per-sample stack: [topLid totals..., other]
+    let maxStack = 0;
+    const stacks = samples.map(s => {
+      const arr = new Array(topLids.length + 1).fill(0);
+      if (!s.chromCounts) return arr;
+      for (const [lid, count] of s.chromCounts) {
+        const idx = topLids.indexOf(lid);
+        if (idx >= 0) arr[idx] = count;
+        else arr[arr.length - 1] += count;
+      }
+      let total = 0;
+      for (const v of arr) total += v;
+      if (total > maxStack) maxStack = total;
+      return arr;
+    });
+    if (maxStack === 0) maxStack = 1;
+
+    _drawAxisAndLabel(ctx, w, h, maxStack, '', '#bbb');
+
+    const N = samples.length;
+    const stripX = (i) => (i / (N - 1)) * (w - 2) + 1;
+
+    // Stacked area: walk bottom-up, draw each band as a polygon.
+    let prevTopY = new Array(N).fill(h - 1);
+    for (let bandI = 0; bandI < topLids.length + 1; bandI++) {
+      const lid = bandI < topLids.length ? topLids[bandI] : null;
+      const fill = lid != null ? _lidColor(lid) : 'rgba(120,120,120,0.6)';
+      ctx.fillStyle = fill;
+      ctx.beginPath();
+      // Bottom edge: previous top, walked left-to-right then right-to-left.
+      ctx.moveTo(stripX(0), prevTopY[0]);
+      const newTopY = new Array(N);
+      for (let i = 0; i < N; i++) {
+        const v = stacks[i][bandI];
+        const top = prevTopY[i] - (v / maxStack) * (h - 14);
+        newTopY[i] = top;
+        ctx.lineTo(stripX(i), top);
+      }
+      for (let i = N - 1; i >= 0; i--) {
+        ctx.lineTo(stripX(i), prevTopY[i]);
+      }
+      ctx.closePath();
+      ctx.fill();
+      prevTopY = newTopY;
+    }
+
+    _renderChromosomeLegend(topLids);
+  }
+
+  function _renderChromosomeLegend(topLids) {
+    const el = document.getElementById('stats-chart-chrom-legend');
+    if (!el) return;
+    if (!topLids.length) { el.innerHTML = '<span style="color:#666;">no live lineages</span>'; return; }
+    const parts = topLids.map(lid =>
+      `<span style="display:inline-flex; align-items:center; gap:3px;">` +
+      `<span style="width:9px; height:9px; background:${_lidColor(lid)}; border-radius:1px;"></span>` +
+      `<span style="color:#bbb;">lid:${lid}</span>` +
+      `</span>`
+    );
+    parts.push(
+      `<span style="display:inline-flex; align-items:center; gap:3px;">` +
+      `<span style="width:9px; height:9px; background:rgba(120,120,120,0.6); border-radius:1px;"></span>` +
+      `<span style="color:#888;">other</span>` +
+      `</span>`
+    );
+    el.innerHTML = parts.join(' ');
+  }
+
+  // ---- Popup show/hide/drag -------------------------------------------------
+
+  let statsPopupVisible = false;
+
+  function openStatsPopup() {
+    const popup = document.getElementById('stats-popup');
+    const btn = document.getElementById('btn-stats');
+    if (!popup) return;
+    popup.style.display = 'flex';
+    if (btn) btn.classList.add('active');
+    statsPopupVisible = true;
+    const idEl = document.getElementById('stats-popup-id');
+    if (idEl && world.uuid) idEl.textContent = world.uuid.slice(0, 8);
+    updateStatsPopup();
+  }
+
+  function closeStatsPopup() {
+    const popup = document.getElementById('stats-popup');
+    const btn = document.getElementById('btn-stats');
+    if (popup) popup.style.display = 'none';
+    if (btn) btn.classList.remove('active');
+    statsPopupVisible = false;
+  }
+
+  function toggleStatsPopup() {
+    if (statsPopupVisible) closeStatsPopup();
+    else openStatsPopup();
+  }
+
+  function _wireStatsPopupDrag() {
+    const popup = document.getElementById('stats-popup');
+    const bar = document.getElementById('stats-popup-titlebar');
+    if (!popup || !bar) return;
+    let dragging = false, startX = 0, startY = 0, startLeft = 0, startTop = 0;
+    bar.addEventListener('mousedown', (e) => {
+      // Ignore clicks on titlebar buttons / inputs.
+      if (e.target.tagName === 'BUTTON' || e.target.tagName === 'INPUT' || e.target.tagName === 'LABEL') return;
+      dragging = true;
+      const rect = popup.getBoundingClientRect();
+      startX = e.clientX; startY = e.clientY;
+      startLeft = rect.left; startTop = rect.top;
+      // Switch from right-anchored to left-anchored so dragging works naturally.
+      popup.style.left = startLeft + 'px';
+      popup.style.top = startTop + 'px';
+      popup.style.right = 'auto';
+      e.preventDefault();
+    });
+    window.addEventListener('mousemove', (e) => {
+      if (!dragging) return;
+      const dx = e.clientX - startX, dy = e.clientY - startY;
+      const left = Math.max(0, Math.min(window.innerWidth - 80, startLeft + dx));
+      const top = Math.max(0, Math.min(window.innerHeight - 40, startTop + dy));
+      popup.style.left = left + 'px';
+      popup.style.top = top + 'px';
+    });
+    window.addEventListener('mouseup', () => { dragging = false; });
+  }
+
+  // ---- Update tick (called from main loop while popup is visible) -----------
+
+  function updateStatsPopup() {
+    if (!statsPopupVisible) return;
+    const samples = world.worldStatsHistory;
+    const body = document.getElementById('stats-popup-body');
+    if (!body) return;
+    for (const canvas of body.querySelectorAll('canvas.stats-chart')) {
+      const key = canvas.dataset.key;
+      if (key) {
+        // Single line — pick a sensible color per metric.
+        const color = key === 'totalEnergy' ? '#fc8'
+          : key === 'avgEnergy' ? '#ff8'
+          : '#8cf';
+        _drawStatsLine(canvas, samples, key, color);
+      } else if (canvas.dataset.keys) {
+        const keys = canvas.dataset.keys.split(',');
+        const colors = (canvas.dataset.colors || '').split(',');
+        _drawStatsMulti(canvas, samples, keys, colors);
+      }
+    }
+    const chromCanvas = document.getElementById('stats-chart-chromosomes');
+    if (chromCanvas) _drawStatsChromosomes(chromCanvas, samples);
+  }
+
+  // ---- Wire DOM handlers ----------------------------------------------------
+
+  function _wireDom() {
+    const btn = document.getElementById('btn-stats');
+    if (btn) btn.addEventListener('click', toggleStatsPopup);
+    const close = document.getElementById('stats-popup-close');
+    if (close) close.addEventListener('click', closeStatsPopup);
+    const toggle = document.getElementById('stats-sampling-toggle');
+    if (toggle) toggle.addEventListener('change', (e) => {
+      world.worldStatsEnabled = !!e.target.checked;
+    });
+    _wireStatsPopupDrag();
+  }
+  _wireDom();
+
+  // Public API.
+  window.worldStatsSampleTick = worldStatsSampleTick;
+  window.updateStatsPopup = updateStatsPopup;
+  window.openStatsPopup = openStatsPopup;
+  window.closeStatsPopup = closeStatsPopup;
+  window.toggleStatsPopup = toggleStatsPopup;
+  Object.defineProperty(window, 'statsPopupVisible', { get: () => statsPopupVisible });
+})();
+
 // ===== 21_interaction.js =====
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 Matas Minelga
@@ -7555,6 +8295,77 @@ function multiverseObserveBye(srcUuid) {
   if (world.knownWorlds.delete(srcUuid)) _recomputeNeighbors();
 }
 
+// Build a stats sample for self. Shared shape with the world-stats payload so
+// remote observers can stash these directly into knownWorlds[uuid].statsHistory.
+function _buildSelfStatsSample() {
+  let n = 0, totalE = 0;
+  for (let i = 0; i < world.maxCells; i++) {
+    if (world.alive[i]) { n++; totalE += world.energy[i]; }
+  }
+  return {
+    tick: world.tick,
+    ts: Date.now(),
+    numCells: n,
+    totalEnergy: totalE,
+    freeP: world.freePCount | 0,
+    freeChrom: world.freeChromosomes ? world.freeChromosomes.length : 0,
+    tps: (typeof currentTps !== 'undefined') ? currentTps : 0,
+  };
+}
+
+function _trimHistory(arr, cap) {
+  if (arr.length > cap) arr.splice(0, arr.length - cap);
+}
+
+// Heartbeat — sends our own stats sample to the bus and appends it to our
+// local statsHistory. Runs at CONFIG.multiverseStatsTicks cadence.
+function multiverseStatsHeartbeatTick() {
+  if (!world.multiverseReady) return;
+  if ((world.tick % CONFIG.multiverseStatsTicks) !== 0) return;
+  const sample = _buildSelfStatsSample();
+  world.statsHistory.push(sample);
+  _trimHistory(world.statsHistory, CONFIG.multiverseStatsHistory);
+  portalBusSend({
+    type: 'world-stats',
+    srcWorldUuid: world.uuid,
+    mx: world.multiverseX,
+    my: world.multiverseY,
+    color: world.color,
+    ...sample,
+  });
+}
+
+// Called from 23d_portal_bus.js on every world-stats from a remote tab.
+// Stashes the sample into knownWorlds[uuid].statsHistory. If the stats arrived
+// before the iam (rare ordering quirk), creates a stub entry from the message
+// fields so the viewer can still render something while iam catches up.
+function multiverseObserveStats(srcUuid, m) {
+  if (srcUuid === world.uuid) return;
+  let entry = world.knownWorlds.get(srcUuid);
+  if (!entry) {
+    entry = {
+      mx: m.mx | 0, my: m.my | 0,
+      color: m.color || '#888',
+      lastSeenTick: world.tick,
+      statsHistory: [],
+    };
+    world.knownWorlds.set(srcUuid, entry);
+    _recomputeNeighbors();
+  }
+  if (!entry.statsHistory) entry.statsHistory = [];
+  entry.statsHistory.push({
+    tick: m.tick | 0,
+    ts: Date.now(),
+    numCells: m.numCells | 0,
+    totalEnergy: +m.totalEnergy || 0,
+    freeP: m.freeP | 0,
+    freeChrom: m.freeChrom | 0,
+    tps: +m.tps || 0,
+  });
+  _trimHistory(entry.statsHistory, CONFIG.multiverseStatsHistory);
+  entry.lastSeenTick = world.tick;
+}
+
 // ===== 23d_portal_bus.js =====
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 Matas Minelga
@@ -7640,6 +8451,9 @@ function _portalBusDispatch(m) {
       if (m.dstWorldUuid !== world.uuid) return;
       if (_portalBusSeen(m.msgId)) return;
       catchJumper(m);
+      break;
+    case 'world-stats':
+      multiverseObserveStats(m.srcWorldUuid, m);
       break;
     case 'portal-lineage-request':
       if (m.dstWorldUuid !== world.uuid) return;
@@ -7742,11 +8556,26 @@ function portalEject(i, side) {
     genomes,
   });
 
+  // 4b) Record the crossing for the multiverse viewer.
+  _recordPortalCrossing('out', side, dstUuid);
+
   // 5) Evict the donor slot. Custom — skip protein/chromosome release because
   //    everything went with the cell to the receiver. Replicase jobs are
   //    cancelled (they don't survive the trip in v1).
   portalEvictCell(i);
   return true;
+}
+
+// Append to the rolling crossing log + bump per-side counters. Trims to
+// CONFIG.multiverseRecentLogCap. Used by both portalEject (donor) and
+// catchJumper (receiver).
+function _recordPortalCrossing(dir, side, peerUuid) {
+  const c = world.portalCrossings;
+  if (!c) return;
+  if (c[dir] && c[dir][side] != null) c[dir][side]++;
+  c.recent.push({ dir, side, peerUuid, tick: world.tick, ts: Date.now() });
+  const cap = CONFIG.multiverseRecentLogCap;
+  if (c.recent.length > cap) c.recent.splice(0, c.recent.length - cap);
 }
 
 // Like killCell but does NOT release internal proteins / subslot proteins /
@@ -7888,6 +8717,9 @@ function catchJumper(payload) {
   world.numCells++;
   gridAddCell(idx);
   lineage.structVersion++;
+
+  // Record the crossing on the receiver side too.
+  _recordPortalCrossing('in', dstSide, payload.srcWorldUuid);
 
   // Ask the donor for ancestry, if any genome is fresh.
   if (pendingForeign.length > 0) {
@@ -8083,10 +8915,14 @@ function mergeLineageFill(payload) {
 // MAIN LOOP
 // ============================================================
 initWorld(); resizeCanvas(); resizeLineageCanvas();
+// Build stamp paints once at startup — independent of the multiverse boot.
+updateBuildStamp();
 // Multiverse boot — async. Tick loop gate (multiverseReady) blocks ticks until
 // the whois/iam handshake settles a multiverse position. Render still runs so
 // the user sees the canvas + portal strips during the ~250 ms scan window.
-bootMultiverse().catch(e => console.error('bootMultiverse failed:', e));
+bootMultiverse()
+  .then(() => { updateWorldIdentity(); updateMultiverseViewer(); })
+  .catch(e => console.error('bootMultiverse failed:', e));
 window.addEventListener('resize', () => { resizeCanvas(); resizeLineageCanvas(); });
 
 // Resizable splitters for the left lineage panel and the right inspector panel.
@@ -8201,7 +9037,12 @@ let currentTps = 0;
 function mainLoop() {
   try {
     if (running && world.multiverseReady) {
-      for (let i = 0; i < ticksPerFrame; i++) { tick(); multiverseHeartbeatTick(); }
+      for (let i = 0; i < ticksPerFrame; i++) {
+        tick();
+        multiverseHeartbeatTick();
+        multiverseStatsHeartbeatTick();
+        worldStatsSampleTick();
+      }
       tpsTicks += ticksPerFrame;
     }
     const nowT = performance.now();
@@ -8213,7 +9054,11 @@ function mainLoop() {
     }
     if (renderEnabled) render();
     updateStats(); updateInspect();
-    if (++frameCounter % 10 === 0) updateMilestones();
+    if (++frameCounter % 10 === 0) {
+      updateMilestones();
+      updateMultiverseViewer();
+    }
+    if (statsPopupVisible) updateStatsPopup();
   } catch (e) {
     console.error('mainLoop error at tick', world && world.tick, e);
     running = false;

@@ -100,6 +100,23 @@ const world = {
   neighbors: { left: null, right: null, top: null, bottom: null },
   knownWorlds: null,
   multiverseReady: false,
+
+  // Portal traffic counters and recent-crossing log — fed by 23e_portal_lineage.js
+  // and rendered by 20c_multiverse_viewer.js. Lifetime per-side counts; recent
+  // is a rolling buffer capped at CONFIG.multiverseRecentLogCap.
+  portalCrossings: {
+    in:  { left: 0, right: 0, top: 0, bottom: 0 },
+    out: { left: 0, right: 0, top: 0, bottom: 0 },
+    recent: [],
+  },
+  // Heartbeat-cadence stats samples for self (mirrors what we receive from
+  // remote worlds via multiverseObserveStats). Used by the multiverse viewer
+  // sparklines so self appears uniformly with remotes.
+  statsHistory: [],
+  // Denser local stats samples (population, energy, per-chromosome counts)
+  // for the dedicated stats popup. Sampling can be paused via worldStatsEnabled.
+  worldStatsHistory: [],
+  worldStatsEnabled: true,
 };
 
 const TOTAL_SUBSLOTS_PER_CELL = NUM_SLOTS * NUM_SUBSLOTS; // 70

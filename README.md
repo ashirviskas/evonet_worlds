@@ -20,7 +20,30 @@ Initial html + js PoC experiments, showing that this may work as we have first m
 ### Architecture
 - [ ] Rewrite for Vulkan. C++ or Rust. Possibly keep js implementation for faster iteration and experiments. Maybe even both cross-implementation compatible. 
 
-Single-page evolution simulation. `poc.html` opens directly from `file://`.
+Single-page evolution simulation. `poc.html` opens directly from `file://` for a single-world session.
+
+## Running
+
+`poc.html` is a single page. The simplest way to look around is to open it directly:
+
+```
+open poc.html         # macOS
+xdg-open poc.html     # Linux
+```
+
+This works for one world. **The multiverse (cells crossing portals between tabs) needs an HTTP server**, because `BroadcastChannel` cross-tab discovery is unreliable or disabled under `file://` in most browsers.
+
+Serve with Python's stdlib HTTP server (no install needed):
+
+```
+python3 -m http.server 8000
+```
+
+Then open <http://localhost:8000/poc.html>. Open the URL in additional tabs to spawn more worlds — they auto-discover via `BroadcastChannel` and lay themselves out on a shared multiverse grid. Each tab's color, short uuid, and `(mx, my)` coordinate appear in the right panel directly under the play / save / load buttons. The "Multiverse" section below the live stats draws a topology of all known worlds, per-side portal traffic counters, and a recent-crossings log.
+
+Click **Stats** in the controls toolbar to open a draggable popup with line charts for population, energy, free pools, and a stacked area chart of the top live chromosome lineages over time. Toggle the "sampling" checkbox to pause data collection.
+
+Re-run `python3 build.py` after editing anything in `src/` or `poc.template.html`. The build stamp at the bottom of the right panel shows the commit and build timestamp baked in by `build.py`.
 
 ## Whatever AI generated
 

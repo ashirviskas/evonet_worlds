@@ -148,4 +148,12 @@ const CONFIG = {
   portalHeartbeatTicks: 600,              // ticks between iam heartbeats (~10 s at 60 tps)
   portalFillTimeoutMs: 5000,              // ms a receiver waits for portal-lineage-fill before orphaning pending nodes
   portalBootScanMs: 250,                  // ms a booting tab listens for iam replies before placing itself
+  multiverseStatsTicks: 60,               // ticks between world-stats heartbeat broadcasts (~1 s at 60 tps)
+  multiverseStatsHistory: 120,            // rolling per-world stats samples kept for the multiverse viewer (~2 min at 1 Hz)
+  multiverseRecentLogCap: 32,             // recent-crossing log size in the multiverse viewer
+
+  // --- World stats history (per-world stats popup) ---
+  worldStatsSampleTicks: 30,              // ticks between local stats snapshots for the per-world stats popup
+  worldStatsHistory: 600,                 // rolling samples kept locally (denser than multiverse heartbeat)
+  worldStatsTopChromosomes: 8,            // number of distinct chromosome lineages tracked in the per-chromosome chart
 };

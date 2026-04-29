@@ -147,3 +147,74 @@ function multiverseObserveIam(srcUuid, mx, my, color) {
 function multiverseObserveBye(srcUuid) {
   if (world.knownWorlds.delete(srcUuid)) _recomputeNeighbors();
 }
+
+// Build a stats sample for self. Shared shape with the world-stats payload so
+// remote observers can stash these directly into knownWorlds[uuid].statsHistory.
+function _buildSelfStatsSample() {
+  let n = 0, totalE = 0;
+  for (let i = 0; i < world.maxCells; i++) {
+    if (world.alive[i]) { n++; totalE += world.energy[i]; }
+  }
+  return {
+    tick: world.tick,
+    ts: Date.now(),
+    numCells: n,
+    totalEnergy: totalE,
+    freeP: world.freePCount | 0,
+    freeChrom: world.freeChromosomes ? world.freeChromosomes.length : 0,
+    tps: (typeof currentTps !== 'undefined') ? currentTps : 0,
+  };
+}
+
+function _trimHistory(arr, cap) {
+  if (arr.length > cap) arr.splice(0, arr.length - cap);
+}
+
+// Heartbeat — sends our own stats sample to the bus and appends it to our
+// local statsHistory. Runs at CONFIG.multiverseStatsTicks cadence.
+function multiverseStatsHeartbeatTick() {
+  if (!world.multiverseReady) return;
+  if ((world.tick % CONFIG.multiverseStatsTicks) !== 0) return;
+  const sample = _buildSelfStatsSample();
+  world.statsHistory.push(sample);
+  _trimHistory(world.statsHistory, CONFIG.multiverseStatsHistory);
+  portalBusSend({
+    type: 'world-stats',
+    srcWorldUuid: world.uuid,
+    mx: world.multiverseX,
+    my: world.multiverseY,
+    color: world.color,
+    ...sample,
+  });
+}
+
+// Called from 23d_portal_bus.js on every world-stats from a remote tab.
+// Stashes the sample into knownWorlds[uuid].statsHistory. If the stats arrived
+// before the iam (rare ordering quirk), creates a stub entry from the message
+// fields so the viewer can still render something while iam catches up.
+function multiverseObserveStats(srcUuid, m) {
+  if (srcUuid === world.uuid) return;
+  let entry = world.knownWorlds.get(srcUuid);
+  if (!entry) {
+    entry = {
+      mx: m.mx | 0, my: m.my | 0,
+      color: m.color || '#888',
+      lastSeenTick: world.tick,
+      statsHistory: [],
+    };
+    world.knownWorlds.set(srcUuid, entry);
+    _recomputeNeighbors();
+  }
+  if (!entry.statsHistory) entry.statsHistory = [];
+  entry.statsHistory.push({
+    tick: m.tick | 0,
+    ts: Date.now(),
+    numCells: m.numCells | 0,
+    totalEnergy: +m.totalEnergy || 0,
+    freeP: m.freeP | 0,
+    freeChrom: m.freeChrom | 0,
+    tps: +m.tps || 0,
+  });
+  _trimHistory(entry.statsHistory, CONFIG.multiverseStatsHistory);
+  entry.lastSeenTick = world.tick;
+}

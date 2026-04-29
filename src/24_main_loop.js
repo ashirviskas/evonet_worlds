@@ -4,10 +4,14 @@
 // MAIN LOOP
 // ============================================================
 initWorld(); resizeCanvas(); resizeLineageCanvas();
+// Build stamp paints once at startup — independent of the multiverse boot.
+updateBuildStamp();
 // Multiverse boot — async. Tick loop gate (multiverseReady) blocks ticks until
 // the whois/iam handshake settles a multiverse position. Render still runs so
 // the user sees the canvas + portal strips during the ~250 ms scan window.
-bootMultiverse().catch(e => console.error('bootMultiverse failed:', e));
+bootMultiverse()
+  .then(() => { updateWorldIdentity(); updateMultiverseViewer(); })
+  .catch(e => console.error('bootMultiverse failed:', e));
 window.addEventListener('resize', () => { resizeCanvas(); resizeLineageCanvas(); });
 
 // Resizable splitters for the left lineage panel and the right inspector panel.
@@ -122,7 +126,12 @@ let currentTps = 0;
 function mainLoop() {
   try {
     if (running && world.multiverseReady) {
-      for (let i = 0; i < ticksPerFrame; i++) { tick(); multiverseHeartbeatTick(); }
+      for (let i = 0; i < ticksPerFrame; i++) {
+        tick();
+        multiverseHeartbeatTick();
+        multiverseStatsHeartbeatTick();
+        worldStatsSampleTick();
+      }
       tpsTicks += ticksPerFrame;
     }
     const nowT = performance.now();
@@ -134,7 +143,11 @@ function mainLoop() {
     }
     if (renderEnabled) render();
     updateStats(); updateInspect();
-    if (++frameCounter % 10 === 0) updateMilestones();
+    if (++frameCounter % 10 === 0) {
+      updateMilestones();
+      updateMultiverseViewer();
+    }
+    if (statsPopupVisible) updateStatsPopup();
   } catch (e) {
     console.error('mainLoop error at tick', world && world.tick, e);
     running = false;

@@ -76,6 +76,9 @@ canvas { display: block; width: 100%; height: 100%; }
 #protein-legend { position: fixed; bottom: 0; left: 320px; right: 340px; max-height: 40vh; background: rgba(20,20,20,0.95); border-top: 1px solid #333; display: flex; flex-wrap: wrap; align-items: center; padding: 2px 8px; gap: 2px; overflow-y: auto; z-index: 10; }
 .legend-swatch { width: 18px; height: 18px; border-radius: 3px; display: flex; align-items: center; justify-content: center; font-size: 8px; cursor: default; flex-shrink: 0; border: 1px solid rgba(255,255,255,0.15); }
 #milestones { position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.6); padding: 10px 14px; border-radius: 6px; font-size: 11px; line-height: 1.6; z-index: 5; pointer-events: none; min-width: 260px; }
+.stats-chart-block { display: flex; flex-direction: column; gap: 2px; }
+.stats-chart-title { font-size: 10px; color: #8cf; font-family: monospace; }
+.stats-chart { background: #0a0a0a; border: 1px solid #333; border-radius: 3px; width: 100%; height: auto; display: block; }
 .ms-check { color: #5f5; }
 .ms-uncheck { color: #555; }
 .ms-count { color: #aaa; font-size: 10px; }
@@ -109,6 +112,7 @@ canvas { display: block; width: 100%; height: 100%; }
     <button id="btn-restart">Restart</button>
     <button id="btn-save-world">Save World</button>
     <button id="btn-load-world">Load World</button>
+    <button id="btn-stats" title="Toggle the per-world stats popup (population, energy, chromosome lineages over time)">Stats</button>
     <input type="file" id="file-load-world" accept=".json" style="display:none">
     <div id="speed-container">
       <label>Speed:</label>
@@ -128,7 +132,20 @@ canvas { display: block; width: 100%; height: 100%; }
       <input type="checkbox" id="render-toggle" checked> Render
     </label>
   </div>
+  <div id="world-identity" style="display:flex; align-items:center; gap:6px; font-size:11px; padding:4px 6px; background:#222; border-radius:3px;">
+    <span id="world-color-swatch" style="width:14px; height:14px; border-radius:3px; border:1px solid #444; flex-shrink:0;"></span>
+    <span style="color:#888;">world</span>
+    <span id="world-id-text" style="color:#ddd; font-family:monospace;">…</span>
+    <span id="world-coord-text" style="color:#888; margin-left:auto;"></span>
+  </div>
   <div id="stats"></div>
+  <div id="multiverse-viewer" style="border-top:1px solid #333; padding-top:8px; display:flex; flex-direction:column; gap:6px;">
+    <b style="color:#8cf;">Multiverse</b>
+    <canvas id="multiverse-topo" width="320" height="160" style="background:#0a0a0a; border:1px solid #333; border-radius:3px;"></canvas>
+    <div id="multiverse-crossings" style="font-size:11px; line-height:1.5;"></div>
+    <div id="multiverse-worlds" style="font-size:10px; display:flex; flex-direction:column; gap:6px;"></div>
+    <div id="multiverse-log" style="font-size:10px; color:#aaa; max-height:120px; overflow-y:auto; font-family:monospace;"></div>
+  </div>
   <div id="cell-actions" style="display:flex; gap:6px; flex-wrap:wrap;">
     <button id="btn-copy-genome">Copy Genome</button>
     <button id="btn-divide">Force Divide</button>
@@ -307,6 +324,7 @@ canvas { display: block; width: 100%; height: 100%; }
     Evonet Worlds &copy; 2026 Matas Minelga &middot;
     <a href="https://github.com/ashirviskas/evonet_worlds" target="_blank" rel="noopener" style="color:#8cf;">Source</a> &middot;
     <a href="https://www.gnu.org/licenses/agpl-3.0.html" target="_blank" rel="noopener" style="color:#8cf;">AGPL-3.0</a>
+    <div id="build-stamp" style="margin-top:4px; font-family:monospace; color:#666;"></div>
   </div>
 </div>
 <div id="protein-legend"></div>
@@ -351,6 +369,44 @@ canvas { display: block; width: 100%; height: 100%; }
   </div>
 </div>
 
+<!-- World Stats Popup -->
+<div id="stats-popup" style="display:none; position:fixed; right:360px; top:60px; width:520px; height:560px; background:#1a1a1a; border:1px solid #555; border-radius:6px; z-index:160; box-shadow:0 4px 16px rgba(0,0,0,0.7); flex-direction:column; resize:both; overflow:hidden;">
+  <div id="stats-popup-titlebar" style="cursor:move; padding:6px 10px; background:#223; display:flex; align-items:center; gap:8px; user-select:none; flex-shrink:0;">
+    <span style="color:#8cf; font-weight:bold; font-size:12px;">World Stats</span>
+    <span id="stats-popup-id" style="color:#888; font-size:10px; font-family:monospace;"></span>
+    <label style="margin-left:auto; font-size:10px; color:#bbb; display:flex; align-items:center; gap:4px;">
+      <input type="checkbox" id="stats-sampling-toggle" checked> sampling
+    </label>
+    <button id="stats-popup-close" style="background:#333; color:#ddd; border:1px solid #555; padding:1px 6px; cursor:pointer; font-size:10px; border-radius:3px;">✕</button>
+  </div>
+  <div id="stats-popup-body" style="overflow:auto; flex:1; padding:8px; display:flex; flex-direction:column; gap:10px;">
+    <div class="stats-chart-block">
+      <div class="stats-chart-title">Population (cells)</div>
+      <canvas class="stats-chart" data-key="numCells" width="500" height="80"></canvas>
+    </div>
+    <div class="stats-chart-block">
+      <div class="stats-chart-title">Total energy</div>
+      <canvas class="stats-chart" data-key="totalEnergy" width="500" height="80"></canvas>
+    </div>
+    <div class="stats-chart-block">
+      <div class="stats-chart-title">Avg energy / cell</div>
+      <canvas class="stats-chart" data-key="avgEnergy" width="500" height="60"></canvas>
+    </div>
+    <div class="stats-chart-block">
+      <div class="stats-chart-title">Free proteins / free chromosomes / photons</div>
+      <canvas class="stats-chart" data-keys="freeP,freeChrom,photons" data-colors="#8cf,#fc8,#ff8" width="500" height="80"></canvas>
+    </div>
+    <div class="stats-chart-block">
+      <div class="stats-chart-title">Top chromosome lineages (live copies, stacked)</div>
+      <canvas id="stats-chart-chromosomes" width="500" height="120"></canvas>
+      <div id="stats-chart-chrom-legend" style="font-size:9px; display:flex; flex-wrap:wrap; gap:4px; margin-top:4px;"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+<!-- BUILD_INFO -->
+</script>
 <script>
 <!-- JS_BUNDLE -->
 </script>

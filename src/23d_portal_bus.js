@@ -83,6 +83,9 @@ function _portalBusDispatch(m) {
       if (_portalBusSeen(m.msgId)) return;
       catchJumper(m);
       break;
+    case 'world-stats':
+      multiverseObserveStats(m.srcWorldUuid, m);
+      break;
     case 'portal-lineage-request':
       if (m.dstWorldUuid !== world.uuid) return;
       if (_portalBusSeen(m.msgId)) return;

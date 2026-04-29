@@ -82,11 +82,26 @@ function portalEject(i, side) {
     genomes,
   });
 
+  // 4b) Record the crossing for the multiverse viewer.
+  _recordPortalCrossing('out', side, dstUuid);
+
   // 5) Evict the donor slot. Custom — skip protein/chromosome release because
   //    everything went with the cell to the receiver. Replicase jobs are
   //    cancelled (they don't survive the trip in v1).
   portalEvictCell(i);
   return true;
+}
+
+// Append to the rolling crossing log + bump per-side counters. Trims to
+// CONFIG.multiverseRecentLogCap. Used by both portalEject (donor) and
+// catchJumper (receiver).
+function _recordPortalCrossing(dir, side, peerUuid) {
+  const c = world.portalCrossings;
+  if (!c) return;
+  if (c[dir] && c[dir][side] != null) c[dir][side]++;
+  c.recent.push({ dir, side, peerUuid, tick: world.tick, ts: Date.now() });
+  const cap = CONFIG.multiverseRecentLogCap;
+  if (c.recent.length > cap) c.recent.splice(0, c.recent.length - cap);
 }
 
 // Like killCell but does NOT release internal proteins / subslot proteins /
@@ -228,6 +243,9 @@ function catchJumper(payload) {
   world.numCells++;
   gridAddCell(idx);
   lineage.structVersion++;
+
+  // Record the crossing on the receiver side too.
+  _recordPortalCrossing('in', dstSide, payload.srcWorldUuid);
 
   // Ask the donor for ancestry, if any genome is fresh.
   if (pendingForeign.length > 0) {
