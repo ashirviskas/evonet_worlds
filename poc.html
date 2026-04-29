@@ -4704,14 +4704,17 @@ function render() {
     const lo = (1 - f) / 2, hi = (1 + f) / 2;
     const xLo = lo * W, xHi = hi * W, xLen = xHi - xLo;
     const yLo = lo * H, yHi = hi * H, yLen = yHi - yLo;
-    // Strip drawn just inside the wall, ~6 world units thick.
-    const t = 6;
-    const activeFill = world.color || 'hsl(0, 0%, 50%)';
+    const t = 6;   // strip thickness in world units
     const closedFill = 'rgba(80, 80, 80, 0.5)';
+    // Each portal strip shows the DESTINATION world's color — visual cue
+    // about which neighbor a cell about to cross will end up in.
     const drawStrip = (wx, wy, ww, wh, side) => {
       const tl = worldToScreen(wx, wy), br = worldToScreen(wx + ww, wy + wh);
-      ctx.fillStyle = world.neighbors && world.neighbors[side] ? activeFill : closedFill;
-      ctx.globalAlpha = world.neighbors && world.neighbors[side] ? 0.55 : 0.25;
+      const neighborUuid = world.neighbors && world.neighbors[side];
+      const neighbor = neighborUuid && world.knownWorlds ? world.knownWorlds.get(neighborUuid) : null;
+      const fill = neighbor && neighbor.color ? neighbor.color : closedFill;
+      ctx.fillStyle = fill;
+      ctx.globalAlpha = neighborUuid ? 0.65 : 0.25;
       ctx.fillRect(tl.x, tl.y, br.x - tl.x, br.y - tl.y);
       ctx.globalAlpha = 1;
     };
@@ -7840,14 +7843,24 @@ function catchJumper(payload) {
   const genomes = [];
   for (const g of payload.genomes) {
     const chrom = new Uint8Array(g.data);
-    const existing = lineageLookupForeign(g.originWorldUuid, g.originLocalId);
+    // Round-trip detection: if the genome's origin uuid is OURS, this cell
+    // was born here and is coming home. Look up by local id directly — the
+    // node lives in lineage.nodes, NOT in foreignIndex (which only holds
+    // nodes imported from other worlds).
+    let existing = -1;
+    if (g.originWorldUuid === world.uuid && g.originLocalId != null
+        && lineage.nodes.has(g.originLocalId)) {
+      existing = g.originLocalId;
+    } else {
+      existing = lineageLookupForeign(g.originWorldUuid, g.originLocalId);
+    }
     let lid;
     if (existing > 0) {
       // Already in our tree — bump copies on this node, rebind chrom buffer.
       const node = lineage.nodes.get(existing);
       lid = existing;
       if (node) {
-        node.event = (node.event === 'portal-in' || node.event === 'portal-revisit') ? 'portal-revisit' : 'portal-in';
+        node.event = 'portal-revisit';
         node.srcWorldUuid = payload.srcWorldUuid;
         node.srcTick = payload.srcTick;
         lineageBumpCopies(node, 'cell');
@@ -8046,45 +8059,16 @@ function mergeLineageFill(payload) {
     }
   }
 
-  // Promote any pending portal-in-pending nodes whose foreign id appears in
-  // requestedForeignIds and now resolves via foreignIndex.
+  // Promote any pending portal-in-pending nodes to portal-in. Pass 2 above
+  // already wired their parents (since pending nodes have parents=[] before
+  // merge, and the fill carries each node's parents — pass 2 finds matching
+  // origin via remap and wires). Here we just relabel.
   if (payload.respondsTo && portalPending.has(payload.respondsTo)) {
     const ent = portalPending.get(payload.respondsTo);
     clearTimeout(ent.timeoutHandle);
-    for (let k = 0; k < ent.pendingLocalIds.length; k++) {
-      const localId = ent.pendingLocalIds[k];
+    for (const localId of ent.pendingLocalIds) {
       const node = lineage.nodes.get(localId);
-      if (!node || node.event !== 'portal-in-pending') continue;
-      // Wire its parents from the donor's view of THIS chromosome's parents.
-      // We didn't store that on send; the fill includes the chromosome itself
-      // as one of its nodes (since requestedForeignIds asked for it). So we
-      // can look up its donor-side node by foreignIndex now.
-      const donorNode = incoming.find(in_ => {
-        const oUuid = in_.originWorldUuid || fromUuid;
-        const oLocal = (in_.originLocalId != null) ? in_.originLocalId : in_.localId;
-        return oUuid === node.originWorldUuid && oLocal === node.originLocalId;
-      });
-      if (donorNode && donorNode.parents) {
-        const newParents = [];
-        for (const pid of donorNode.parents) {
-          const lp = remap.get(pid);
-          if (lp && lineage.nodes.has(lp)) newParents.push(lp);
-        }
-        node.parents = newParents;
-        node.primaryParentId = newParents.length ? newParents[0] : -1;
-        for (const pp of newParents) {
-          lineageAddChild(pp, localId);
-          const pn = lineage.nodes.get(pp);
-          if (pn) pn.directChildrenAlive++;
-        }
-        if (newParents.length) {
-          const pn = lineage.nodes.get(newParents[0]);
-          if (pn) node.gen = (pn.gen | 0) + 1;
-          // Pending node was inserted with empty parents — roll up now.
-          lineageWalkAncestorsAlive(node, +1);
-        }
-      }
-      node.event = 'portal-in';
+      if (node && node.event === 'portal-in-pending') node.event = 'portal-in';
     }
     portalPending.delete(payload.respondsTo);
   }

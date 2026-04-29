@@ -82,14 +82,17 @@ function render() {
     const lo = (1 - f) / 2, hi = (1 + f) / 2;
     const xLo = lo * W, xHi = hi * W, xLen = xHi - xLo;
     const yLo = lo * H, yHi = hi * H, yLen = yHi - yLo;
-    // Strip drawn just inside the wall, ~6 world units thick.
-    const t = 6;
-    const activeFill = world.color || 'hsl(0, 0%, 50%)';
+    const t = 6;   // strip thickness in world units
     const closedFill = 'rgba(80, 80, 80, 0.5)';
+    // Each portal strip shows the DESTINATION world's color — visual cue
+    // about which neighbor a cell about to cross will end up in.
     const drawStrip = (wx, wy, ww, wh, side) => {
       const tl = worldToScreen(wx, wy), br = worldToScreen(wx + ww, wy + wh);
-      ctx.fillStyle = world.neighbors && world.neighbors[side] ? activeFill : closedFill;
-      ctx.globalAlpha = world.neighbors && world.neighbors[side] ? 0.55 : 0.25;
+      const neighborUuid = world.neighbors && world.neighbors[side];
+      const neighbor = neighborUuid && world.knownWorlds ? world.knownWorlds.get(neighborUuid) : null;
+      const fill = neighbor && neighbor.color ? neighbor.color : closedFill;
+      ctx.fillStyle = fill;
+      ctx.globalAlpha = neighborUuid ? 0.65 : 0.25;
       ctx.fillRect(tl.x, tl.y, br.x - tl.x, br.y - tl.y);
       ctx.globalAlpha = 1;
     };
