@@ -45,7 +45,7 @@ function freeChromosomeTick() {
       const prevId = lineageTransfer(fc.data, nd, 'sameFree');
       fc.data = nd;
       fc.bytesErodedSinceCheckpoint = (fc.bytesErodedSinceCheckpoint || 0) + 1;
-      if (prevId > 0 && fc.bytesErodedSinceCheckpoint >= CONFIG.lineageDegradeCheckpointBytes) {
+      if (prevId && fc.bytesErodedSinceCheckpoint >= CONFIG.lineageDegradeCheckpointBytes) {
         // Emit a checkpoint: new node descending from prev, rebind buffer to it.
         lineageCheckpoint(fc.data, [prevId], 'degrade-checkpoint', 'free');
         fc.bytesErodedSinceCheckpoint = 0;

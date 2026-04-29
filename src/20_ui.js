@@ -170,7 +170,7 @@ function updateInspectPopup(rec) {
     h += `<button data-action="edit" data-kind="free" data-idx="${idx}" style="font-size:10px; padding:2px 6px;">Edit</button>`;
     h += `<button data-action="copy-free" data-idx="${idx}" style="font-size:10px; padding:2px 6px;">Copy</button>`;
     h += `<button data-action="save-lib" data-kind="free" data-idx="${idx}" style="font-size:10px; padding:2px 6px;">Save to library</button>`;
-    if (getLineageId(fc.data) > 0) {
+    if (getLineageId(fc.data)) {
       h += `<button data-action="jump-lineage" data-kind="free" data-idx="${idx}" style="font-size:10px; padding:2px 6px;">Lineage</button>`;
     }
     h += `</div>`;
@@ -263,7 +263,7 @@ function updateInspectPopup(rec) {
       h += `<button data-action="edit" data-kind="cell" data-cell="${i}" data-chrom="${c}" style="font-size:10px; padding:1px 5px;">Edit</button>`;
       h += `<button data-action="save-lib" data-kind="cell" data-cell="${i}" data-chrom="${c}" style="font-size:10px; padding:1px 5px;">Save</button>`;
       h += `<button data-action="eject" data-cell="${i}" data-chrom="${c}" style="font-size:10px; padding:1px 5px;">Eject</button>`;
-      if (getLineageId(chrom) > 0) {
+      if (getLineageId(chrom)) {
         h += `<button data-action="jump-lineage" data-kind="cell" data-cell="${i}" data-chrom="${c}" style="font-size:10px; padding:1px 5px;">Lineage</button>`;
       }
       h += `</div>`;

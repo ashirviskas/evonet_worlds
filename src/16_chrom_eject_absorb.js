@@ -8,9 +8,12 @@ function chromEjectTick(cellIdx) {
   if (cnt < CONFIG.chromEjectThreshold) return;
   const genome = world.genomes[cellIdx];
   if (!genome || genome.length === 0) return;
-  // Eject a random chromosome
+  // Eject a random chromosome. If the free pool is full, spawnFreeChromosome
+  // returns undefined without performing the cellToFree lineage transfer —
+  // mark the chromosome dead so the donor cell pool counter stays accurate.
   const ci = world.rng.nextInt(genome.length);
-  spawnFreeChromosome(world.pos_x[cellIdx], world.pos_y[cellIdx], genome[ci], 'cellToFree');
+  const buf = spawnFreeChromosome(world.pos_x[cellIdx], world.pos_y[cellIdx], genome[ci], 'cellToFree');
+  if (!buf) lineageMarkDead(genome[ci], 'cell');
   genome.splice(ci, 1);
   // Consume ejector proteins
   cytoSub(cellIdx, 20, CONFIG.chromEjectThreshold);

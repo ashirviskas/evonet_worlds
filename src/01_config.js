@@ -144,9 +144,9 @@ const CONFIG = {
 
   // --- Cross-tab portals (multiverse) ---
   portalStripFrac: 0.30,                  // fraction of each wall (centered) that is a portal; outside the strip the wall bounces
-  portalAncestryDepth: 50,                // BFS depth cap when serving portal-lineage-fill requests
+  portalAncestryDepth: 100000,            // BFS depth cap when serving portal-lineage-fill — effectively the whole tree; ancestor records are small so the fill stays cheap even for deep chains
   portalHeartbeatTicks: 600,              // ticks between iam heartbeats (~10 s at 60 tps)
-  portalFillTimeoutMs: 5000,              // ms a receiver waits for portal-lineage-fill before orphaning pending nodes
+  portalFillTimeoutMs: 5000,              // ms a receiver waits for portal-lineage-fill before giving up (no event flip, ancestry just stays incomplete)
   portalBootScanMs: 250,                  // ms a booting tab listens for iam replies before placing itself
   multiverseStatsTicks: 60,               // ticks between world-stats heartbeat broadcasts (~1 s at 60 tps)
   multiverseStatsHistory: 120,            // rolling per-world stats samples kept for the multiverse viewer (~2 min at 1 Hz)

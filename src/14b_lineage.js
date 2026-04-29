@@ -1,12 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 Matas Minelga
 // ============================================================
-// LINEAGE — DNA-level family tree.
+// LINEAGE — DNA-level family tree, keyed by global chromosome UUID.
 //
-// Every distinct Uint8Array chromosome that ever exists gets a monotonic
-// lineage id. Nodes record parents (0..N), parentBytes (per-parent byte
-// contribution from replicase), birthTick, event, liveness. We also keep a
-// reverse `children` index so the renderer + pruner can walk down cheaply.
+// Every distinct chromosome gets a 32-char hex UUID at birth (8-hex prefix =
+// FNV-32 of its birth world's uuid; 24-hex = crypto-random). UUIDs are global
+// across all worlds in the multiverse — receivers of a portal-ejected cell
+// just upsert by UUID, no local-id translation, no foreignIndex.
+//
+// Nodes record parents (0..N), parentBytes (per-parent byte contribution from
+// replicase), birthTick, birth metadata (donor world+tick for debug), event,
+// liveness. We also keep a reverse `children` index so the renderer + pruner
+// can walk down cheaply.
 //
 // Prune policy:
 //  - Terminal dead-leaf (no children ever) dropped after lineageDeadLeafGraceTicks.
@@ -16,20 +21,14 @@
 //  - Truly cap-exceeding: drop oldest dead-leaf outright.
 // ============================================================
 const lineage = {
-  nextId: 1,
-  nodes: new Map(),              // id -> node record
-  children: new Map(),           // parentId -> Set<childId>
-  chromToId: new WeakMap(),      // Uint8Array -> id
-  redirects: new Map(),          // deletedId -> survivorId (or -1 if truly orphaned) — resolves ghost IDs to living ancestors
+  nodes: new Map(),              // uuid -> node record
+  children: new Map(),           // parentUuid -> Set<childUuid>
+  chromToId: new WeakMap(),      // Uint8Array -> uuid
+  redirects: new Map(),          // deletedUuid -> survivorUuid (or null) — resolves ghost UUIDs to living ancestors
   structVersion: 0,              // bumped whenever parents/children mutate — renderer watches this
   prunedSafetyDrops: 0,
   collapsedMerges: 0,
   ghostParentsRepaired: 0,       // debug: times getLineageId followed a redirect chain
-  // Cross-tab portal index — "originWorldUuid:originLocalId" -> localId for
-  // every node that arrived from another world. Lets catch/fill paths dedup
-  // on foreign identity without scanning all nodes. Populated only by
-  // 23e_portal_lineage.js's import path; cleared in lineageReset.
-  foreignIndex: new Map(),
 };
 
 function lineageHashPrefix(u8) {
@@ -39,6 +38,34 @@ function lineageHashPrefix(u8) {
   for (let i = 0; i < n; i++) { h ^= u8[i]; h = Math.imul(h, 0x01000193) >>> 0; }
   return h >>> 0;
 }
+
+// FNV-1a over a JS string — used to derive the 8-hex world prefix of a fresh
+// chromosome UUID. Identical hash for the same world.uuid means every chrom
+// born in a given tab carries that tab's prefix, so the renderer can color by
+// origin world by reading just the first 8 chars of any chromosome's UUID.
+function _fnv32Hex(s) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return (h >>> 0).toString(16).padStart(8, '0');
+}
+
+// 32-hex-char chromosome UUID. 8-hex world prefix + 24-hex (12 random bytes).
+// 96 bits of random entropy per world — collision-free in practice.
+function mintChromosomeUuid() {
+  const prefix = _fnv32Hex(world && world.uuid ? world.uuid : '');
+  const buf = new Uint8Array(12);
+  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+    crypto.getRandomValues(buf);
+  } else {
+    for (let i = 0; i < 12; i++) buf[i] = Math.floor(Math.random() * 256);
+  }
+  let s = prefix;
+  for (let i = 0; i < 12; i++) s += buf[i].toString(16).padStart(2, '0');
+  return s;
+}
+
+// Short display form for UI labels — first 6 hex chars.
+function lineageShortId(uuid) { return uuid ? uuid.slice(0, 6) : ''; }
 
 function lineageAddChild(parentId, childId) {
   let set = lineage.children.get(parentId);
@@ -53,20 +80,64 @@ function lineageRemoveChild(parentId, childId) {
   if (set.size === 0) lineage.children.delete(parentId);
 }
 
-// holder ∈ {'cell', 'free'} — which pool the new buffer is held in. Drives the
-// per-pool counters that back the renderer's alive/ghost/dead tri-state.
-// parentBytes is the per-parent contribution array from replicase (aligned with
-// `parents`); optional, used only for the multi-parent identical-match tiebreak.
-function assignLineage(chrom, parents, event, holder, parentBytes) {
-  if (!chrom || !(chrom instanceof Uint8Array)) return -1;
-  const existing = lineage.chromToId.get(chrom);
-  if (existing !== undefined) return existing;
+// Unified entry point. Either creates a new lineage node or merges into an
+// existing one, keyed by chromosome UUID. Replaces the old assignLineage +
+// lineageInsertImported split.
+//
+// fields: {
+//   uuid?,         // pre-existing UUID (portal arrival / ancestry fill); omit for fresh local birth
+//   parents?,      // array of parent UUIDs
+//   parentBytes?,  // per-parent byte contribution (replicase only)
+//   event,         // 'replicase' | 'crossover' | 'division-mutate' | 'initial' | 'primordial' | 'editor-edit' | 'library-spawn' | 'degrade-checkpoint' | 'digest-checkpoint'
+//   holder,        // 'cell' | 'free'
+//   birth?,        // { worldUuid, tick } — donor's birth context; defaults to local world
+//   birthTick?,    // explicit override (used for fill); defaults to birth.tick or world.tick
+//   gen?,          // explicit generation depth (used for fill)
+//   dedup?,        // 'local' (default) | 'none' — skip dedup ladder for foreign arrivals
+// }
+//
+// Returns the resolved UUID (new or existing). Returns null if chrom is invalid.
+function lineageUpsert(chrom, fields) {
+  if (!chrom || !(chrom instanceof Uint8Array)) return null;
+  fields = fields || {};
 
-  const parentsArr = parents ? parents.filter(p => p > 0 && lineage.nodes.has(p)) : [];
+  // Buffer already bound to a node — refcount unchanged (the buffer is the same
+  // logical instance, no new arrival).
+  const existingByBuf = lineage.chromToId.get(chrom);
+  if (existingByBuf !== undefined) return existingByBuf;
 
-  // Zero-mutation single-parent copy = same chromosome, not a new lineage entry.
-  // Rebind the fresh buffer onto the parent's id and return it.
-  if (parentsArr.length === 1) {
+  const dedup = fields.dedup || 'local';
+  const holder = fields.holder || 'cell';
+  const incomingParents = fields.parents || [];
+  const parentsArr = incomingParents.filter(p => typeof p === 'string' && p.length > 0 && lineage.nodes.has(p));
+  // parentBytes must align with parentsArr (filter dropped some) — drop the byte
+  // counts for filtered-out parents.
+  let parentBytes = null;
+  if (fields.parentBytes && fields.parentBytes.length === incomingParents.length) {
+    parentBytes = [];
+    for (let i = 0; i < incomingParents.length; i++) {
+      if (parentsArr.indexOf(incomingParents[i]) >= 0) parentBytes.push(fields.parentBytes[i] || 0);
+    }
+  }
+
+  // ---- Foreign / re-arrival path: caller carries the canonical UUID ----
+  if (fields.uuid) {
+    const uuid = fields.uuid;
+    const existing = lineage.nodes.get(uuid);
+    if (existing) {
+      lineage.chromToId.set(chrom, uuid);
+      lineageBumpCopies(existing, holder);
+      // Enrich with any newly-revealed parents this fill brings.
+      if (parentsArr.length) lineageEnrichParents(existing, parentsArr, parentBytes);
+      return uuid;
+    }
+    return _lineageCreateNode(uuid, chrom, parentsArr, parentBytes, fields, holder);
+  }
+
+  // ---- Local birth path: dedup ladder before minting a fresh UUID ----
+
+  // 1. Single-parent zero-mutation copy = same chromosome. Rebind to parent.
+  if (dedup === 'local' && parentsArr.length === 1) {
     const p = lineage.nodes.get(parentsArr[0]);
     if (p && p.data && p.data.length === chrom.length) {
       let same = true;
@@ -79,12 +150,11 @@ function assignLineage(chrom, parents, event, holder, parentBytes) {
     }
   }
 
-  // Multi-parent identical-match: a recombination child can happen to be
-  // byte-identical to one of its parents. Rebind onto that parent rather than
-  // minting a redundant lineage node. Tiebreak: parent that contributed the
-  // most bytes; equal bytes → smallest parent id (matches lineageRecomputePrimary).
-  if (parentsArr.length > 1) {
-    let bestId = -1, bestBytes = -1;
+  // 2. Multi-parent identical-match: a recombination child can happen to be
+  // byte-identical to one of its parents. Rebind onto that parent. Tiebreak:
+  // most bytes contributed; equal bytes → lex-smallest parent uuid for stability.
+  if (dedup === 'local' && parentsArr.length > 1) {
+    let bestId = null, bestBytes = -1;
     for (let pi = 0; pi < parentsArr.length; pi++) {
       const pid = parentsArr[pi];
       const p = lineage.nodes.get(pid);
@@ -95,11 +165,11 @@ function assignLineage(chrom, parents, event, holder, parentBytes) {
       }
       if (!same) continue;
       const bytes = parentBytes ? (parentBytes[pi] || 0) : p.data.length;
-      if (bytes > bestBytes || (bytes === bestBytes && (bestId < 0 || pid < bestId))) {
+      if (bytes > bestBytes || (bytes === bestBytes && (bestId === null || pid < bestId))) {
         bestBytes = bytes; bestId = pid;
       }
     }
-    if (bestId > 0) {
+    if (bestId !== null) {
       const winner = lineage.nodes.get(bestId);
       lineage.chromToId.set(chrom, winner.id);
       lineageBumpCopies(winner, holder);
@@ -107,12 +177,11 @@ function assignLineage(chrom, parents, event, holder, parentBytes) {
     }
   }
 
-  // Sibling dedup: partial replication often emits several byte-identical
-  // chromosomes from the same parent set. Collapse them onto the first-recorded
+  // 3. Sibling dedup: partial replication often emits several byte-identical
+  // chromosomes from the same parent set. Collapse onto the first-recorded
   // sibling so the DNA tree doesn't fan out into crowds of identical leaves.
-  if (parentsArr.length >= 1) {
-    const parentKey = parentsArr.slice().sort((a, b) => a - b);
-    // Scan children of the parent with the smallest child-set (cheapest).
+  if (dedup === 'local' && parentsArr.length >= 1) {
+    const parentKey = parentsArr.slice().sort();
     let scanPid = parentsArr[0];
     let scanSize = Infinity;
     for (const pid of parentsArr) {
@@ -127,7 +196,7 @@ function assignLineage(chrom, parents, event, holder, parentBytes) {
         if (!s || !s.data) continue;
         if (s.length !== chrom.length) continue;
         if (s.parents.length !== parentKey.length) continue;
-        const sParents = s.parents.slice().sort((a, b) => a - b);
+        const sParents = s.parents.slice().sort();
         let parentsMatch = true;
         for (let i = 0; i < sParents.length; i++) {
           if (sParents[i] !== parentKey[i]) { parentsMatch = false; break; }
@@ -144,15 +213,30 @@ function assignLineage(chrom, parents, event, holder, parentBytes) {
     }
   }
 
-  const id = lineage.nextId++;
-  // Checkpoint events (degradation / digestion) represent the SAME chromosome
-  // losing bytes, not a new descendant. We mark these so ancestor counters
-  // don't inflate every 8 bytes of erosion.
+  // No dedup hit — mint a fresh UUID.
+  const newUuid = mintChromosomeUuid();
+  return _lineageCreateNode(newUuid, chrom, parentsArr, parentBytes, fields, holder);
+}
+
+// Backwards-compatible thin wrapper. Existing callers pass parents/event/holder
+// positionally; we forward into upsert with dedup='local'.
+function assignLineage(chrom, parents, event, holder, parentBytes) {
+  return lineageUpsert(chrom, { parents, parentBytes, event, holder, dedup: 'local' });
+}
+
+// Shared node creation tail. Builds the node, links into nodes/children,
+// rolls up descendantsAlive on ancestors. Used by both birth and import paths.
+function _lineageCreateNode(uuid, chrom, parentsArr, parentBytes, fields, holder) {
+  const event = fields.event || 'unknown';
+  // Checkpoint events represent the SAME chromosome losing bytes, not a new
+  // descendant. Skip ancestor descendantsEver/Alive rollup so erosion doesn't
+  // inflate counters every N bytes.
   const isCheckpointEvent = event === 'degrade-checkpoint' || event === 'digest-checkpoint';
+  const birthMeta = fields.birth || { worldUuid: world.uuid, tick: world.tick };
   const node = {
-    id,
-    parents: parentsArr,
-    parentBytes: null,         // aligned with parents[]; null for non-replicase events
+    id: uuid,
+    parents: parentsArr.slice(),
+    parentBytes: parentBytes ? parentBytes.slice() : null,
     shape: chromosomeShape(chrom),
     length: chrom.length,
     hashPrefix: lineageHashPrefix(chrom),
@@ -160,41 +244,40 @@ function assignLineage(chrom, parents, event, holder, parentBytes) {
     // sees exactly what the chromosome was at the moment it was recorded. Copy
     // (don't alias) so later in-place mutation of the buffer doesn't rewrite history.
     data: new Uint8Array(chrom),
-    birthTick: world.tick,
-    event: event || 'unknown',
+    // birthTick: the tick this node was minted in the local world's frame for
+    // local births, or the donor's frame for fill-imported ancestors. Used by
+    // the inspector for display; prune uses deathTick (always local).
+    birthTick: fields.birthTick != null ? fields.birthTick : birthMeta.tick,
+    birth: { worldUuid: birthMeta.worldUuid, tick: birthMeta.tick },
+    event,
     alive: 1,
-    copies: 1,                 // total live byte-identical instances collapsed onto this node
+    copies: 1,
     copiesInCells: holder === 'cell' ? 1 : 0,
     copiesInFree:  holder === 'free' ? 1 : 0,
-    copiesEver: 1,             // cumulative count — includes rebinds, never decremented
+    copiesEver: 1,
     directChildrenAlive: 0,
-    descendantsEver: 0,        // monotonic; inspector-only stat. Not read by prune.
-    descendantsAlive: 0,       // current count of transitively-alive descendants; retention key.
-    // Whether this node's own liveness counts toward its ancestors' descendantsAlive.
-    // False for checkpoints — degradation is the same chromosome, not a new descendant.
+    descendantsEver: 0,
+    descendantsAlive: 0,
     contributesToDescendants: !isCheckpointEvent,
     deathTick: 0,
-    mergedCount: 0,            // how many collapsed waypoints are "summarised" by this node
-    primaryParentId: parentsArr.length ? parentsArr[0] : -1, // recomputed once parentBytes is set
-    gen: 0,                    // generation depth via primary-parent chain; recomputed with primaryParentId
+    mergedCount: 0,
+    primaryParentId: parentsArr.length ? parentsArr[0] : null,
+    gen: fields.gen != null ? fields.gen : 0,
   };
-  lineage.nodes.set(id, node);
-  lineage.chromToId.set(chrom, id);
-  if (node.primaryParentId > 0) {
+  lineage.nodes.set(uuid, node);
+  lineage.chromToId.set(chrom, uuid);
+  if (node.primaryParentId && fields.gen == null) {
     const pn = lineage.nodes.get(node.primaryParentId);
     if (pn) node.gen = (pn.gen | 0) + 1;
   }
+  if (parentBytes) lineageRecomputePrimary(node);
 
-  // Reverse index + rollups.
   for (const pid of parentsArr) {
-    lineageAddChild(pid, id);
+    lineageAddChild(pid, uuid);
     const pn = lineage.nodes.get(pid);
     if (pn) pn.directChildrenAlive++;
   }
 
-  // descendantsEver + descendantsAlive rollup on ancestor chain (bounded by
-  // seen-set to handle DAG merges). Checkpoint nodes are the same chromosome,
-  // not a new descendant — skip the rollup entirely for them.
   if (!isCheckpointEvent) {
     const seen = new Set();
     const stack = parentsArr.slice();
@@ -211,7 +294,135 @@ function assignLineage(chrom, parents, event, holder, parentBytes) {
   }
 
   lineage.structVersion++;
-  return id;
+  return uuid;
+}
+
+// Insert a serialized ancestor node from a portal fill. Metadata only — does
+// NOT touch chromToId or copy counters. The node arrives as a "ghost"
+// (alive=0, copies=0) until a real chromosome buffer with this UUID shows up
+// locally and lineageBumpCopies animates it.
+//
+// If the UUID already exists locally, this just enriches missing parent
+// edges (and fills in event/birth when the local node lacks them). It never
+// overwrites an existing event with the fill's — that's the user's directive:
+// once a node has a birth event, that's what it is everywhere.
+//
+// `s` is the shape produced by _serializeLineageNode in 23e_portal_lineage.js:
+//   { uuid, parents, parentBytes, event, birthTick, birth, gen, data }
+function lineageImportAncestor(s) {
+  if (!s || !s.uuid) return null;
+  const uuid = s.uuid;
+  const existing = lineage.nodes.get(uuid);
+  if (existing) {
+    // Enrich missing parent edges only. Don't mutate event/birth on a node
+    // that already has them — local node is canonical.
+    const knownParents = (s.parents || []).filter(p => typeof p === 'string' && lineage.nodes.has(p));
+    if (knownParents.length) {
+      const alignedBytes = (s.parentBytes && s.parentBytes.length === (s.parents || []).length)
+        ? s.parents.map((p, i) => knownParents.indexOf(p) >= 0 ? s.parentBytes[i] : 0).filter((_, i) => knownParents.indexOf(s.parents[i]) >= 0)
+        : null;
+      lineageEnrichParents(existing, knownParents, alignedBytes);
+    }
+    return uuid;
+  }
+
+  const isCheckpointEvent = s.event === 'degrade-checkpoint' || s.event === 'digest-checkpoint';
+  const data = s.data instanceof Uint8Array ? new Uint8Array(s.data) : new Uint8Array(0);
+  const knownParents = (s.parents || []).filter(p => typeof p === 'string' && lineage.nodes.has(p));
+  const alignedBytes = (s.parentBytes && s.parentBytes.length === (s.parents || []).length)
+    ? (s.parents.map((p, i) => knownParents.indexOf(p) >= 0 ? (s.parentBytes[i] || 0) : null).filter(v => v !== null))
+    : null;
+
+  const node = {
+    id: uuid,
+    parents: knownParents,
+    parentBytes: alignedBytes ? alignedBytes.slice() : null,
+    shape: chromosomeShape(data),
+    length: data.length,
+    hashPrefix: lineageHashPrefix(data),
+    data,
+    birthTick: s.birthTick != null ? s.birthTick : 0,
+    birth: s.birth || { worldUuid: '', tick: s.birthTick || 0 },
+    event: s.event || 'unknown',
+    alive: 0,
+    copies: 0,
+    copiesInCells: 0,
+    copiesInFree: 0,
+    copiesEver: 0,
+    directChildrenAlive: 0,
+    descendantsEver: 0,
+    descendantsAlive: 0,
+    contributesToDescendants: !isCheckpointEvent,
+    deathTick: 0,
+    mergedCount: 0,
+    primaryParentId: knownParents.length ? knownParents[0] : null,
+    gen: s.gen != null ? s.gen : 0,
+  };
+  lineage.nodes.set(uuid, node);
+  for (const pid of knownParents) lineageAddChild(pid, uuid);
+  if (alignedBytes) lineageRecomputePrimary(node);
+  lineage.structVersion++;
+  return uuid;
+}
+
+// Add new parent edges to an existing node — used when a re-arrival or
+// ancestry fill brings previously-unknown ancestors. Idempotent: skips parents
+// already present. Bumps directChildrenAlive on each new parent + rolls
+// descendantsAlive up the new ancestor chain (skipping ancestors that were
+// already reachable via existing parents — diamond-DAG-safe).
+function lineageEnrichParents(node, newParents, newParentBytes) {
+  if (!newParents || !newParents.length) return 0;
+
+  // Snapshot existing ancestors BEFORE adding new edges so we know which
+  // ancestors already count this node and shouldn't be double-bumped.
+  const oldAncestors = new Set();
+  if (node.alive && node.contributesToDescendants) {
+    const stack = node.parents.slice();
+    while (stack.length) {
+      const pid = stack.pop();
+      if (oldAncestors.has(pid)) continue;
+      oldAncestors.add(pid);
+      const pn = lineage.nodes.get(pid);
+      if (pn) for (const gp of pn.parents) stack.push(gp);
+    }
+  }
+
+  const addedParents = [];
+  for (let i = 0; i < newParents.length; i++) {
+    const pid = newParents[i];
+    if (!pid || node.parents.indexOf(pid) >= 0) continue;
+    const pn = lineage.nodes.get(pid);
+    if (!pn) continue;
+    node.parents.push(pid);
+    if (node.parentBytes) {
+      node.parentBytes.push(newParentBytes ? (newParentBytes[i] || 0) : 0);
+    }
+    lineageAddChild(pid, node.id);
+    if (node.alive) pn.directChildrenAlive++;
+    addedParents.push(pid);
+  }
+  if (addedParents.length === 0) return 0;
+
+  lineageRecomputePrimary(node);
+
+  if (node.alive && node.contributesToDescendants) {
+    const seen = new Set();
+    const stack = addedParents.slice();
+    while (stack.length) {
+      const pid = stack.pop();
+      if (seen.has(pid)) continue;
+      seen.add(pid);
+      if (oldAncestors.has(pid)) continue;   // already counts us
+      const pn = lineage.nodes.get(pid);
+      if (!pn) continue;
+      pn.descendantsAlive = (pn.descendantsAlive || 0) + 1;
+      pn.descendantsEver++;
+      for (const gp of pn.parents) stack.push(gp);
+    }
+  }
+
+  lineage.structVersion++;
+  return addedParents.length;
 }
 
 // DAG-safe walk: apply delta to `descendantsAlive` on every transitive ancestor.
@@ -231,101 +442,21 @@ function lineageWalkAncestorsAlive(node, delta) {
   }
 }
 
-// Insert a node that arrived from another world via a portal. Bypasses the
-// dedup paths in assignLineage — the donor already gave us a fully-formed
-// identity (origin uuid + originLocalId) and we mint a fresh local id, so
-// foreign nodes never collide with locally-born nodes. parents must already
-// be rewritten to LOCAL ids by the caller. Returns the new local id.
-//
-// chrom: Uint8Array carrying the chromosome bytes (held by a cell or free pool).
-// fields: { parents, originWorldUuid, originLocalId, event, birthTick?, gen?,
-//           srcWorldUuid?, srcTick?, copies?, copiesInCells?, copiesInFree? }.
-// holder: 'cell' | 'free' (drives the live-pool counter).
-function lineageInsertImported(chrom, fields, holder) {
-  const id = lineage.nextId++;
-  const parentsArr = Array.isArray(fields.parents) ? fields.parents.filter(p => p > 0 && lineage.nodes.has(p)) : [];
-  const node = {
-    id,
-    parents: parentsArr,
-    parentBytes: null,
-    shape: chromosomeShape(chrom),
-    length: chrom.length,
-    hashPrefix: lineageHashPrefix(chrom),
-    data: new Uint8Array(chrom),
-    birthTick: fields.birthTick != null ? fields.birthTick : world.tick,
-    event: fields.event || 'portal-in',
-    alive: 1,
-    copies: fields.copies != null ? fields.copies : 1,
-    copiesInCells: holder === 'cell' ? 1 : 0,
-    copiesInFree:  holder === 'free' ? 1 : 0,
-    copiesEver: 1,
-    directChildrenAlive: 0,
-    descendantsEver: 0,
-    descendantsAlive: 0,
-    contributesToDescendants: true,
-    deathTick: 0,
-    mergedCount: 0,
-    primaryParentId: parentsArr.length ? parentsArr[0] : -1,
-    gen: fields.gen != null ? fields.gen : 0,
-    // Portal provenance:
-    originWorldUuid: fields.originWorldUuid,
-    originLocalId: fields.originLocalId,
-    srcWorldUuid: fields.srcWorldUuid,
-    srcTick: fields.srcTick,
-  };
-  lineage.nodes.set(id, node);
-  lineage.chromToId.set(chrom, id);
-  if (fields.originWorldUuid && fields.originLocalId != null) {
-    lineage.foreignIndex.set(`${fields.originWorldUuid}:${fields.originLocalId}`, id);
-  }
-  if (node.primaryParentId > 0 && node.gen === 0) {
-    const pn = lineage.nodes.get(node.primaryParentId);
-    if (pn) node.gen = (pn.gen | 0) + 1;
-  }
-  for (const pid of parentsArr) {
-    lineageAddChild(pid, id);
-    const pn = lineage.nodes.get(pid);
-    if (pn) pn.directChildrenAlive++;
-  }
-  // Ancestor descendantsAlive rollup (DAG-safe).
-  const seen = new Set();
-  const stack = parentsArr.slice();
-  while (stack.length) {
-    const pid = stack.pop();
-    if (seen.has(pid)) continue;
-    seen.add(pid);
-    const pn = lineage.nodes.get(pid);
-    if (!pn) continue;
-    pn.descendantsEver++;
-    pn.descendantsAlive = (pn.descendantsAlive || 0) + 1;
-    for (const gp of pn.parents) stack.push(gp);
-  }
-  lineage.structVersion++;
-  return id;
-}
-
-// Lookup: have we seen this foreign chromosome before?
-// Returns the local id if yes, -1 if no.
-function lineageLookupForeign(originWorldUuid, originLocalId) {
-  if (!originWorldUuid || originLocalId == null) return -1;
-  const id = lineage.foreignIndex.get(`${originWorldUuid}:${originLocalId}`);
-  return (id && lineage.nodes.has(id)) ? id : -1;
-}
-
+// Lookup: returns the UUID for a chromosome buffer, following redirects if the
+// node was deleted (collapsed/dropped). Returns null if unknown.
 function getLineageId(chrom) {
-  if (!chrom) return -1;
+  if (!chrom) return null;
   let id = lineage.chromToId.get(chrom);
-  if (id === undefined) return -1;
-  // Follow redirects if the node was deleted (collapsed/dropped).
+  if (id === undefined) return null;
   if (lineage.redirects.size && lineage.redirects.has(id)) {
     const seen = new Set();
     let followed = false;
     while (lineage.redirects.has(id) && !seen.has(id)) { seen.add(id); id = lineage.redirects.get(id); followed = true; }
     if (followed) lineage.ghostParentsRepaired++;
-    if (id > 0 && lineage.nodes.has(id)) lineage.chromToId.set(chrom, id); // collapse chain for next time
-    else return -1;
+    if (id && lineage.nodes.has(id)) lineage.chromToId.set(chrom, id);
+    else return null;
   }
-  return lineage.nodes.has(id) ? id : -1;
+  return lineage.nodes.has(id) ? id : null;
 }
 
 function lineageGetNode(id) { return lineage.nodes.get(id); }
@@ -336,20 +467,18 @@ function lineageGetNode(id) { return lineage.nodes.get(id); }
 // Also clears the renderer-side highlight set, popup selection, and bumps
 // structVersion so the layout cache rebuilds.
 function lineageReset() {
-  lineage.nextId = 1;
   lineage.nodes.clear();
   lineage.children.clear();
   lineage.chromToId = new WeakMap();
   lineage.redirects.clear();
-  lineage.foreignIndex.clear();
   lineage.structVersion++;
   lineage.prunedSafetyDrops = 0;
   lineage.collapsedMerges = 0;
   lineage.ghostParentsRepaired = 0;
   if (typeof lineageHighlight !== 'undefined') lineageHighlight.ids = new Set();
   if (typeof lineageView !== 'undefined') {
-    lineageView.selectedId = -1;
-    lineageView.hoverId = -1;
+    lineageView.selectedId = null;
+    lineageView.hoverId = null;
     lineageView.hoverEdge = null;
   }
   if (typeof hideLineagePopup === 'function') hideLineagePopup();
@@ -376,8 +505,8 @@ function lineageBumpCopies(node, holder) {
 
 // holder ∈ {'cell','free'} — which pool the retiring buffer came from.
 function lineageMarkDead(idOrChrom, holder) {
-  const id = typeof idOrChrom === 'number' ? idOrChrom : getLineageId(idOrChrom);
-  if (id <= 0) return;
+  const id = typeof idOrChrom === 'string' ? idOrChrom : getLineageId(idOrChrom);
+  if (!id) return;
   const n = lineage.nodes.get(id);
   if (!n || !n.alive) return;
   if (holder === 'cell' && n.copiesInCells > 0) n.copiesInCells--;
@@ -398,7 +527,7 @@ function lineageMarkDead(idOrChrom, holder) {
 // Pool-crossing directions shift one count from the source pool to the destination pool.
 function lineageTransfer(oldChrom, newChrom, direction) {
   const id = getLineageId(oldChrom);
-  if (id <= 0) return id;
+  if (!id) return null;
   lineage.chromToId.set(newChrom, id);
   const n = lineage.nodes.get(id);
   if (!n) return id;
@@ -414,15 +543,15 @@ function lineageTransfer(oldChrom, newChrom, direction) {
 
 // Mint a new lineage node for a buffer that has already been assigned an id via
 // earlier transfers (erosion) — e.g. every N bytes eroded, we want a checkpoint
-// node with the current byte pattern. Clears the chromToId binding so assignLineage
+// node with the current byte pattern. Clears the chromToId binding so upsert
 // takes the new-node path, then decrements the prior node's refcount for this
 // buffer (markDead handles the still-multi-holder case correctly).
 function lineageCheckpoint(buf, parents, event, holder) {
   const prevId = getLineageId(buf);
-  if (prevId <= 0) return -1;
+  if (!prevId) return null;
   lineage.chromToId.delete(buf);
-  const newId = assignLineage(buf, parents, event, holder);
-  if (newId > 0 && newId !== prevId) lineageMarkDead(prevId, holder);
+  const newId = lineageUpsert(buf, { parents, event, holder, dedup: 'local' });
+  if (newId && newId !== prevId) lineageMarkDead(prevId, holder);
   return newId;
 }
 
@@ -430,7 +559,7 @@ function lineageCheckpoint(buf, parents, event, holder) {
 // Cached on the node; call after parentBytes is populated (replicase completion).
 // Also refreshes node.gen, which tracks depth via the primary-parent chain.
 function lineageRecomputePrimary(node) {
-  if (!node.parents.length) { node.primaryParentId = -1; node.gen = 0; return; }
+  if (!node.parents.length) { node.primaryParentId = null; node.gen = 0; return; }
   if (node.parents.length === 1) {
     node.primaryParentId = node.parents[0];
   } else {
@@ -444,27 +573,27 @@ function lineageRecomputePrimary(node) {
     }
     node.primaryParentId = bestId;
   }
-  const pp = node.primaryParentId > 0 ? lineage.nodes.get(node.primaryParentId) : null;
+  const pp = node.primaryParentId ? lineage.nodes.get(node.primaryParentId) : null;
   node.gen = pp ? (pp.gen | 0) + 1 : 0;
 }
 
 // Repair counter drift: walk every actual buffer the world holds, recompute
 // copies / copiesIn{Cells,Free} / alive / directChildrenAlive / descendantsAlive
 // from ground truth. Long-running sessions accumulate "phantom alive" nodes
-// when assignLineage / lineageMarkDead don't perfectly pair up across all
-// transfer paths; this is the canonical fsck. Cheap: O(buffers + N + edges).
+// when upsert / markDead don't perfectly pair up across all transfer paths;
+// this is the canonical fsck. Cheap: O(buffers + N + edges).
 function lineageRebuildLiveness() {
   const cellCount = new Map(), freeCount = new Map();
   for (let ci = 0; ci < world.maxCells; ci++) {
     if (!world.alive[ci]) continue;
     const g = world.genomes[ci]; if (!g) continue;
     for (const chrom of g) {
-      const id = getLineageId(chrom); if (id <= 0) continue;
+      const id = getLineageId(chrom); if (!id) continue;
       cellCount.set(id, (cellCount.get(id) || 0) + 1);
     }
   }
   for (const fc of world.freeChromosomes) {
-    const id = getLineageId(fc.data); if (id <= 0) continue;
+    const id = getLineageId(fc.data); if (!id) continue;
     freeCount.set(id, (freeCount.get(id) || 0) + 1);
   }
 
@@ -530,9 +659,9 @@ function lineagePrune() {
     if (n.alive) continue;
     if (n.directChildrenAlive > 0) continue;
     const kids = lineage.children.get(id);
-    if (kids && kids.size > 0) continue; // still has descendants in the graph
-    if ((n.descendantsAlive || 0) > 0) continue;                             // subtree still has live descendants — keep
-    if (pin > 0 && (n.copiesEver || 0) >= pin) continue;                     // pinned: prolific lineage preserved
+    if (kids && kids.size > 0) continue;
+    if ((n.descendantsAlive || 0) > 0) continue;
+    if (pin > 0 && (n.copiesEver || 0) >= pin) continue;
     if (now - n.deathTick < grace) continue;
     dropIds.push(id);
   }
@@ -605,7 +734,6 @@ function lineageChainCollapse(target, ignorePin) {
 
   for (const { id, n, childId } of candidates) {
     if (lineage.nodes.size < target) break;
-    // Re-verify (earlier collapses may have changed this node's situation).
     if (!lineage.nodes.has(id)) continue;
     if (n.parents.length !== 1) continue;
     const kids = lineage.children.get(id);
@@ -618,24 +746,14 @@ function lineageChainCollapse(target, ignorePin) {
     const parent = lineage.nodes.get(parentId);
     if (!parent) continue;
 
-    // Rewire: child's parent becomes `parentId` (was `id`).
     child.parents[0] = parentId;
-    if (child.parentBytes) {
-      // Scale to the new parent's length — approximate; we don't know the historical byte path.
-      // Use the child's own length as a safe stand-in (frac = child.length / parent.length mapped later).
-      // Simpler: drop parentBytes after collapse; renderer falls back to frac=1.0.
-      child.parentBytes = null;
-    }
+    if (child.parentBytes) child.parentBytes = null;
     lineageRemoveChild(id, childId);
     lineageAddChild(parentId, childId);
 
-    // Transfer primary-parent if it pointed at the waypoint, then refresh gen.
     if (child.primaryParentId === id) child.primaryParentId = parentId;
     lineageRecomputePrimary(child);
 
-    // Transfer refcount state from waypoint into the kept parent. Post-collapse,
-    // chromosomes whose chromToId still points at K will resolve to P via the
-    // redirect below — so P must carry K's liveness and its cell/free counts.
     const parentWasAlive = !!parent.alive;
     parent.copiesInCells = (parent.copiesInCells || 0) + (n.copiesInCells || 0);
     parent.copiesInFree  = (parent.copiesInFree  || 0) + (n.copiesInFree  || 0);
@@ -648,22 +766,17 @@ function lineageChainCollapse(target, ignorePin) {
         const gpn = lineage.nodes.get(gpid);
         if (gpn) gpn.directChildrenAlive++;
       }
-      if (parent.contributesToDescendants) lineageWalkAncestorsAlive(parent, +1); // P just came alive — ancestors gain 1 for P (unless P is a checkpoint)
+      if (parent.contributesToDescendants) lineageWalkAncestorsAlive(parent, +1);
     }
-    // directChildrenAlive: parent loses K if K was alive (K is about to be deleted);
-    // gains the rewired child if that child is alive (K used to be that slot).
     if (n.alive && parent.directChildrenAlive > 0) parent.directChildrenAlive--;
     if (child.alive) parent.directChildrenAlive++;
-    // K's own liveness contribution to its ancestors is gone (unless K never contributed).
     if (n.alive && n.contributesToDescendants) lineageWalkAncestorsAlive(n, -1);
 
-    // Increment merge counter on parent so UI can show "[+3 collapsed]".
     parent.mergedCount += 1 + n.mergedCount;
 
-    // Remove the waypoint itself.
     lineageRemoveChild(parentId, id);
     lineage.nodes.delete(id);
-    lineage.redirects.set(id, parentId); // any chromosome still pointing at this id resolves to the kept parent
+    lineage.redirects.set(id, parentId);
     lineage.collapsedMerges++;
   }
   lineage.structVersion++;
@@ -673,7 +786,6 @@ function lineageDropNode(id) {
   const n = lineage.nodes.get(id);
   if (!n) return;
 
-  // Reparent living children onto this node's parents (keeps DAG connected).
   const kids = lineage.children.get(id);
   if (kids) {
     for (const childId of kids) {
@@ -685,13 +797,11 @@ function lineageDropNode(id) {
         if (child.parentBytes) child.parentBytes.splice(idx, 1);
       }
       for (const gp of n.parents) {
-        if (!lineage.nodes.has(gp)) continue; // don't re-attach onto dead/missing ancestors
+        if (!lineage.nodes.has(gp)) continue;
         if (child.parents.indexOf(gp) < 0) {
           child.parents.push(gp);
           if (child.parentBytes) child.parentBytes.push(0);
           lineageAddChild(gp, childId);
-          // The reparented edge moves a (possibly alive) direct child onto gp —
-          // bump gp's counter so prune's keep-alive gate stays accurate.
           if (child.alive) {
             const gpn = lineage.nodes.get(gp);
             if (gpn) gpn.directChildrenAlive++;
@@ -702,9 +812,6 @@ function lineageDropNode(id) {
     }
   }
 
-  // Remove ourselves from our parents' children index. If we were alive at drop
-  // time, decrement their directChildrenAlive too (normally n is already dead
-  // when we land here, but Pass-3 safety drops can race).
   for (const pid of n.parents) {
     lineageRemoveChild(pid, id);
     if (n.alive) {
@@ -712,22 +819,17 @@ function lineageDropNode(id) {
       if (pn && pn.directChildrenAlive > 0) pn.directChildrenAlive--;
     }
   }
-  // If we were alive, subtract our self-contribution from every ancestor's
-  // descendantsAlive. (Our own descendants re-parent onto our parents — their
-  // contributions are preserved via DAG walks.) Checkpoints never contributed.
   if (n.alive && n.contributesToDescendants) lineageWalkAncestorsAlive(n, -1);
 
   lineage.children.delete(id);
   lineage.nodes.delete(id);
 
-  // Record redirect so any chromosome whose chromToId still points here resolves to a living ancestor.
-  let survivor = -1;
+  let survivor = null;
   for (const pid of n.parents) { if (lineage.nodes.has(pid)) { survivor = pid; break; } }
   lineage.redirects.set(id, survivor);
 
   lineage.structVersion++;
 
-  // Cascade: if a parent is now a dead orphan (no kids, under keep threshold, past grace), drop it too.
   lineageCascadeDropDeadAncestors(n.parents);
 }
 
@@ -744,7 +846,7 @@ function lineageCascadeDropDeadAncestors(parents) {
     if (pn.directChildrenAlive > 0) continue;
     const kids = lineage.children.get(pid);
     if (kids && kids.size > 0) continue;
-    if ((pn.descendantsAlive || 0) > 0) continue; // subtree still has live descendants — keep
+    if ((pn.descendantsAlive || 0) > 0) continue;
     if (world.tick - pn.deathTick < grace) continue;
     const up = pn.parents.slice();
     lineageDropNode(pid);
@@ -773,34 +875,30 @@ function lineageAssertInvariants() {
     if (!world.alive[ci]) continue;
     const g = world.genomes[ci]; if (!g) continue;
     for (const chrom of g) {
-      const id = getLineageId(chrom); if (id <= 0) continue;
+      const id = getLineageId(chrom); if (!id) continue;
       cellCount.set(id, (cellCount.get(id) || 0) + 1);
     }
   }
   for (const fc of world.freeChromosomes) {
-    const id = getLineageId(fc.data); if (id <= 0) continue;
+    const id = getLineageId(fc.data); if (!id) continue;
     freeCount.set(id, (freeCount.get(id) || 0) + 1);
   }
 
-  // INV-1 — pool counters match observed live buffers.
   for (const [id, n] of lineage.nodes) {
     const c = cellCount.get(id) || 0, f = freeCount.get(id) || 0;
-    if ((n.copiesInCells || 0) !== c) console.error(`[lineage INV-1] copiesInCells drift #${id}: node=${n.copiesInCells} observed=${c}`);
-    if ((n.copiesInFree  || 0) !== f) console.error(`[lineage INV-1] copiesInFree drift #${id}: node=${n.copiesInFree} observed=${f}`);
-    if ((n.copies || 0) !== c + f)    console.error(`[lineage INV-1] copies drift #${id}: node=${n.copies} observed=${c + f}`);
-    if (!!n.alive !== ((n.copies || 0) > 0)) console.error(`[lineage INV-1] alive drift #${id}: alive=${n.alive} copies=${n.copies}`);
+    if ((n.copiesInCells || 0) !== c) console.error(`[lineage INV-1] copiesInCells drift ${id}: node=${n.copiesInCells} observed=${c}`);
+    if ((n.copiesInFree  || 0) !== f) console.error(`[lineage INV-1] copiesInFree drift ${id}: node=${n.copiesInFree} observed=${f}`);
+    if ((n.copies || 0) !== c + f)    console.error(`[lineage INV-1] copies drift ${id}: node=${n.copies} observed=${c + f}`);
+    if (!!n.alive !== ((n.copies || 0) > 0)) console.error(`[lineage INV-1] alive drift ${id}: alive=${n.alive} copies=${n.copies}`);
   }
 
-  // INV-2 — directChildrenAlive equals observed alive-kid count.
   for (const [id, kids] of lineage.children) {
     const n = lineage.nodes.get(id); if (!n) continue;
     let live = 0;
     for (const kid of kids) { const kn = lineage.nodes.get(kid); if (kn && kn.alive) live++; }
-    if (n.directChildrenAlive !== live) console.error(`[lineage INV-2] directChildrenAlive drift #${id}: node=${n.directChildrenAlive} observed=${live}`);
+    if (n.directChildrenAlive !== live) console.error(`[lineage INV-2] directChildrenAlive drift ${id}: node=${n.directChildrenAlive} observed=${live}`);
   }
 
-  // INV-3 — descendantsAlive equals transitive count of alive, contributing descendants
-  // (checkpoints are the same chromosome, not distinct descendants — they're excluded).
   for (const [id, n] of lineage.nodes) {
     const seen = new Set();
     const stack = [...(lineage.children.get(id) || [])];
@@ -814,6 +912,6 @@ function lineageAssertInvariants() {
       const kids = lineage.children.get(d);
       if (kids) for (const k of kids) stack.push(k);
     }
-    if ((n.descendantsAlive || 0) !== cnt) console.error(`[lineage INV-3] descendantsAlive drift #${id}: node=${n.descendantsAlive} observed=${cnt}`);
+    if ((n.descendantsAlive || 0) !== cnt) console.error(`[lineage INV-3] descendantsAlive drift ${id}: node=${n.descendantsAlive} observed=${cnt}`);
   }
 }

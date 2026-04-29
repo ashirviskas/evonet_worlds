@@ -162,7 +162,7 @@ function distributeChromosomes(parentIdx, childIdx, genome) {
     const src = childChroms[world.rng.nextInt(childChroms.length)];
     const dup = mutateChromosome(src, CONFIG.mutationRate);
     const srcId = getLineageId(src);
-    assignLineage(dup, srcId > 0 ? [srcId] : [], 'division-mutate', 'cell');
+    assignLineage(dup, srcId ? [srcId] : [], 'division-mutate', 'cell');
     childChroms.push(dup);
   }
 

@@ -151,7 +151,7 @@ document.getElementById('btn-kill-highlighted').addEventListener('click', () => 
     let match = false;
     for (let c = 0; c < g.length; c++) {
       const lid = getLineageId(g[c]);
-      if (lid > 0 && hl.has(lid)) { match = true; break; }
+      if (lid && hl.has(lid)) { match = true; break; }
     }
     if (match) { killCell(i); killed++; }
   }
