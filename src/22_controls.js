@@ -73,6 +73,24 @@ document.getElementById('light-speed').addEventListener('input', (e) => {
   CONFIG.lightSourceSpeed = parseInt(e.target.value) / 1000000;
   document.getElementById('light-speed-val').textContent = CONFIG.lightSourceSpeed.toFixed(6);
 });
+document.getElementById('photon-energy').addEventListener('input', (e) => {
+  // Linear 0..1000 → 0.1..20. Slider 261 ≈ 5.30 (default).
+  CONFIG.photonEnergyValue = 0.1 + (parseInt(e.target.value) / 1000) * 19.9;
+  document.getElementById('photon-energy-val').textContent = CONFIG.photonEnergyValue.toFixed(2);
+});
+document.getElementById('photon-spawn').addEventListener('input', (e) => {
+  CONFIG.photonSpawnRate = parseInt(e.target.value);
+  document.getElementById('photon-spawn-val').textContent = CONFIG.photonSpawnRate;
+});
+document.getElementById('photon-lifetime').addEventListener('input', (e) => {
+  // Log-mapped 0..1000 → 100..30000 (300x). Slider 596 ≈ 3000 (default).
+  CONFIG.photonLifetime = Math.round(100 * Math.pow(300, parseInt(e.target.value) / 1000));
+  document.getElementById('photon-lifetime-val').textContent = CONFIG.photonLifetime;
+});
+document.getElementById('grid-cell-size').addEventListener('input', (e) => {
+  // Restart-only — value is read by btn-restart. Just update the readout.
+  document.getElementById('grid-cell-size-val').textContent = parseInt(e.target.value);
+});
 document.getElementById('deg-start-age').addEventListener('input', (e) => { CONFIG.degradationStartAge = parseInt(e.target.value); document.getElementById('deg-start-age-val').textContent = (CONFIG.degradationStartAge / 1000) + 'k'; });
 document.getElementById('deg-start-rate').addEventListener('input', (e) => { CONFIG.degradationStartRate = parseInt(e.target.value) / 1000000; document.getElementById('deg-start-rate-val').textContent = CONFIG.degradationStartRate.toFixed(4); });
 document.getElementById('deg-increase').addEventListener('input', (e) => { CONFIG.degradationIncreasePerEra = parseInt(e.target.value) / 100; document.getElementById('deg-increase-val').textContent = (CONFIG.degradationIncreasePerEra * 100).toFixed(0) + '%'; });
@@ -148,6 +166,21 @@ document.getElementById('btn-restart').addEventListener('click', () => {
   world.rng = makeRNG(CONFIG.seed); world.tick = 0; world.numCells = 0;
   closeAllInspectPopups();
   lineageReset();
+  // Apply pending grid bucket size — rebuilds grid arrays only if changed.
+  const newGcs = parseInt(document.getElementById('grid-cell-size').value) || 24;
+  if (newGcs !== world.gridCellSize) {
+    CONFIG.gridCellSize = newGcs;
+    world.gridCellSize = newGcs;
+    world.gridW = Math.ceil(CONFIG.worldWidth / newGcs);
+    world.gridH = Math.ceil(CONFIG.worldHeight / newGcs);
+    world.grid = new Array(world.gridW * world.gridH);
+    for (let k = 0; k < world.grid.length; k++) world.grid[k] = [];
+    world.freePGrid = new Array(world.gridW * world.gridH);
+    for (let k = 0; k < world.freePGrid.length; k++) world.freePGrid[k] = [];
+    world.cellGridIdx.fill(-1);
+    world.freePGridIdx.fill(-1);
+  }
+  world.maxRadius = CONFIG.spawnRadius;
   for (let i = 0; i < world.maxCells; i++) { world.alive[i] = 0; world.genomes[i] = null; world.cellGridIdx[i] = -1; }
   for (let i = 0; i < world.grid.length; i++) world.grid[i].length = 0;
   world.subslotType.fill(255); world.subslotCount.fill(0); world.slotOpen.fill(1); world.internalProteins.fill(0);

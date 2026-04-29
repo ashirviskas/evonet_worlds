@@ -39,7 +39,8 @@ function membraneDivide(cellIdx) {
   const childIdx = spawnCell(
     world.pos_x[cellIdx] + Math.cos(angle) * dist,
     world.pos_y[cellIdx] + Math.sin(angle) * dist,
-    cellIdx, world.generation[cellIdx] + 1
+    cellIdx, world.generation[cellIdx] + 1,
+    world.radius[cellIdx]
   );
   if (childIdx === -1) { world.membraneDividing[cellIdx] = 0; return; }
 

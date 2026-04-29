@@ -127,8 +127,10 @@ function photonTick() {
 
     let hit = false;
     let absorbed = false;
-    const gxMin = gx > 0 ? gx - 1 : 0, gxMax = gx < gw - 1 ? gx + 1 : gx;
-    const gyMin = gy > 0 ? gy - 1 : 0, gyMax = gy < gh - 1 ? gy + 1 : gy;
+    let pSpan = 1;
+    if (world.maxRadius > gcs * 0.5) { pSpan = Math.ceil(world.maxRadius / gcs); if (pSpan < 1) pSpan = 1; }
+    const gxMin = gx - pSpan < 0 ? 0 : gx - pSpan, gxMax = gx + pSpan >= gw ? gw - 1 : gx + pSpan;
+    const gyMin = gy - pSpan < 0 ? 0 : gy - pSpan, gyMax = gy + pSpan >= gh ? gh - 1 : gy + pSpan;
 
     for (let gy2 = gyMin; gy2 <= gyMax && !hit; gy2++) {
       for (let gx2 = gxMin; gx2 <= gxMax && !hit; gx2++) {

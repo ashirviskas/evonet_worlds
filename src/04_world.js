@@ -107,6 +107,8 @@ function initWorld() {
   world.pos_x = new Float32Array(max); world.pos_y = new Float32Array(max);
   world.vel_x = new Float32Array(max); world.vel_y = new Float32Array(max);
   world.radius = new Float32Array(max); world.energy = new Float32Array(max);
+  world.cellUpkeep = new Float32Array(max);
+  world.maxRadius = CONFIG.spawnRadius;
   world.membraneHP = new Float32Array(max);
   world.age = new Uint32Array(max); world.parentId = new Int32Array(max).fill(-1);
   world.generation = new Uint32Array(max);
@@ -238,7 +240,7 @@ function initWorld() {
   }
 }
 
-function spawnCell(x, y, parentId, generation) {
+function spawnCell(x, y, parentId, generation, radiusOverride) {
   let idx = -1;
   for (let i = 0; i < world.maxCells; i++) { if (!world.alive[i]) { idx = i; break; } }
   if (idx === -1) return -1;
@@ -246,7 +248,10 @@ function spawnCell(x, y, parentId, generation) {
   world.alive[idx] = 1;
   world.pos_x[idx] = x; world.pos_y[idx] = y;
   world.vel_x[idx] = 0; world.vel_y[idx] = 0;
-  world.radius[idx] = 8 + world.rng.next() * 4;
+  const r = (radiusOverride !== undefined) ? radiusOverride : CONFIG.spawnRadius;
+  world.radius[idx] = (r < CONFIG.minRadius) ? CONFIG.minRadius : (r > CONFIG.maxRadius ? CONFIG.maxRadius : r);
+  if (world.radius[idx] > world.maxRadius) world.maxRadius = world.radius[idx];
+  world.cellUpkeep[idx] = CONFIG.metabolismCost;
   world.energy[idx] = CONFIG.initialEnergy;
   world.membraneHP[idx] = CONFIG.membraneMaxHP;
   world.age[idx] = 0; world.parentId[idx] = parentId; world.generation[idx] = generation;

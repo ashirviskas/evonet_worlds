@@ -190,6 +190,30 @@ canvas { display: block; width: 100%; height: 100%; }
       <input type="range" id="light-speed" min="0" max="200" value="20" style="width:80px;">
       <span id="light-speed-val">0.00002</span>
     </div>
+    <div style="display:flex; align-items:center; gap:6px;">
+      <label>Photon energy:</label>
+      <input type="range" id="photon-energy" min="0" max="1000" value="261" style="width:80px;">
+      <span id="photon-energy-val">5.30</span>
+    </div>
+    <div style="display:flex; align-items:center; gap:6px;">
+      <label>Spawn rate:</label>
+      <input type="range" id="photon-spawn" min="0" max="20" step="1" value="2" style="width:80px;">
+      <span id="photon-spawn-val">2</span>
+    </div>
+    <div style="display:flex; align-items:center; gap:6px;">
+      <label>Lifetime:</label>
+      <input type="range" id="photon-lifetime" min="0" max="1000" value="596" style="width:80px;">
+      <span id="photon-lifetime-val">3000</span>
+    </div>
+  </div>
+  <div style="font-size:11px; display:flex; flex-direction:column; gap:4px; border-top:1px solid #333; padding-top:8px;">
+    <b>Spatial grid</b>
+    <div style="display:flex; align-items:center; gap:6px;">
+      <label title="Applies on Restart">Bucket size:</label>
+      <input type="range" id="grid-cell-size" min="12" max="400" step="4" value="24" style="width:80px;">
+      <span id="grid-cell-size-val">24</span>
+      <span style="color:#888; font-size:10px;">(restart)</span>
+    </div>
   </div>
   <div style="font-size:11px; display:flex; flex-direction:column; gap:4px; border-top:1px solid #333; padding-top:8px;">
     <b>Energy economy</b>

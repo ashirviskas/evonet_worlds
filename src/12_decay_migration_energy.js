@@ -271,7 +271,8 @@ function divideCell(parentIdx) {
   const childIdx = spawnCell(
     world.pos_x[parentIdx] + Math.cos(angle) * dist,
     world.pos_y[parentIdx] + Math.sin(angle) * dist,
-    parentIdx, world.generation[parentIdx] + 1);
+    parentIdx, world.generation[parentIdx] + 1,
+    world.radius[parentIdx]);
   if (childIdx === -1) return -1;
 
   // Follow any in-flight replicase jobs to whichever cell now owns their

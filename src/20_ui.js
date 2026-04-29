@@ -196,6 +196,8 @@ function updateInspectPopup(rec) {
   }
   h += `Membrane HP: ${world.membraneHP[i].toFixed(1)} / ${CONFIG.membraneMaxHP}<br>`;
   h += `Age: ${world.age[i]}<br>`;
+  h += `Radius: ${world.radius[i].toFixed(2)} (${CONFIG.minRadius}–${CONFIG.maxRadius})<br>`;
+  h += `Membrane upkeep: ${(world.cellUpkeep ? world.cellUpkeep[i] : CONFIG.metabolismCost).toFixed(4)}/tick<br>`;
   const dr = getCellDegradationRate(i);
   h += `DNA deg: ${dr > 0 ? dr.toFixed(6) : 'none'}<br>`;
   h += `Parent: ${world.parentId[i]} | Vel: (${world.vel_x[i].toFixed(2)}, ${world.vel_y[i].toFixed(2)})<br>`;

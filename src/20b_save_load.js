@@ -36,7 +36,7 @@ function _decTA(e) {
 // in this list is either a scalar (handled below) or rebuildable (grids).
 const WORLD_TA_FIELDS = [
   'alive', 'pos_x', 'pos_y', 'vel_x', 'vel_y',
-  'radius', 'energy', 'membraneHP', 'age', 'parentId', 'generation',
+  'radius', 'cellUpkeep', 'energy', 'membraneHP', 'age', 'parentId', 'generation',
   'subslotType', 'subslotCount', 'slotOpen', 'internalProteins',
   'cytoOccMask', 'subslotOccMask', 'slotTypeCount',
   'decayNextCyto', 'decayNextSub',
@@ -62,7 +62,7 @@ const WORLD_SCALAR_FIELDS = [
   'freePCount', 'freePLiveCount',
   'replicase_nextSlot',
   'lightSourceAngle',
-  'gridCellSize', 'gridW', 'gridH',
+  'gridCellSize', 'gridW', 'gridH', 'maxRadius',
   'energyFieldW', 'energyFieldH',
 ];
 

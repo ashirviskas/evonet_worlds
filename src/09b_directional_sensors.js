@@ -88,8 +88,10 @@ function proteinNearScan() {
     const flagsBase = i * NUM_SLOTS;
     let gx = (xi / gcs) | 0; if (gx < 0) gx = 0; else if (gx >= gw) gx = gw - 1;
     let gy = (yi / gcs) | 0; if (gy < 0) gy = 0; else if (gy >= gh) gy = gh - 1;
-    const gxMin = gx > 0 ? gx - 1 : 0, gxMax = gx < gw - 1 ? gx + 1 : gx;
-    const gyMin = gy > 0 ? gy - 1 : 0, gyMax = gy < gh - 1 ? gy + 1 : gy;
+    let span = 1;
+    if (reach > gcs * 0.5) { span = Math.ceil(reach / gcs); if (span < 1) span = 1; }
+    const gxMin = gx - span < 0 ? 0 : gx - span, gxMax = gx + span >= gw ? gw - 1 : gx + span;
+    const gyMin = gy - span < 0 ? 0 : gy - span, gyMax = gy + span >= gh ? gh - 1 : gy + span;
     for (let gy2 = gyMin; gy2 <= gyMax; gy2++) {
       for (let gx2 = gxMin; gx2 <= gxMax; gx2++) {
         const bucket = world.freePGrid[gy2 * gw + gx2];

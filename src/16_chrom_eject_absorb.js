@@ -31,8 +31,10 @@ function chromAbsorbAll() {
     const fc = world.freeChromosomes[i];
     const gx = Math.floor(fc.x / gcs), gy = Math.floor(fc.y / gcs);
     let absorbed = false;
-    const gxMin = Math.max(0, gx - 1), gxMax = Math.min(gw - 1, gx + 1);
-    const gyMin = Math.max(0, gy - 1), gyMax = Math.min(gh - 1, gy + 1);
+    let cSpan = 1;
+    if (world.maxRadius > gcs * 0.5) { cSpan = Math.ceil(world.maxRadius / gcs); if (cSpan < 1) cSpan = 1; }
+    const gxMin = Math.max(0, gx - cSpan), gxMax = Math.min(gw - 1, gx + cSpan);
+    const gyMin = Math.max(0, gy - cSpan), gyMax = Math.min(gh - 1, gy + cSpan);
     for (let gy2 = gyMin; gy2 <= gyMax && !absorbed; gy2++) {
       for (let gx2 = gxMin; gx2 <= gxMax && !absorbed; gx2++) {
         const bucket = world.grid[gy2 * gw + gx2];

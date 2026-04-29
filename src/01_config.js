@@ -113,6 +113,15 @@ const CONFIG = {
   membraneRepairPerProtein: 10,      // HP restored per consumed Base Membrane (type 19)
   membraneRepairMinDeficit: 10,      // only heal when HP deficit >= this (avoids wasting proteins on tiny damage)
 
+  // --- Cell size / membrane growth ---
+  spawnRadius: 10.0,                 // every new cell starts at this radius (no randomness)
+  minRadius: 1.0,                    // hard lower bound for radius (Shrinkage protein cannot push below)
+  maxRadius: 1000.0,                 // hard upper bound for radius (Growth protein cannot push above)
+  radiusGrowthStep: 0.25,            // radius increase per Growth protein consumed
+  radiusShrinkStep: 0.25,            // radius decrease per Shrinkage protein consumed
+  membraneRemodelRate: 0.01,         // per-protein per-tick consumption probability for Growth/Shrinkage
+  upkeepAreaExponent: 2.0,           // metabolismCost scales by (radius / spawnRadius)^this
+
   // --- Membrane-driven division ---
   membraneDivisionThreshold: 10,     // Base Membrane (type 19) count required in cytoplasm to arm division; exactly this many are consumed at split (the surplus carries over and splits with cytoplasm). Also requires ≥1 Divider Trigger (type 4); all Divider Triggers are consumed at split.
   legacyDivisionEnabled: false,      // if true, DIVIDE_MARKER opcode (0x02) works; if false, only membrane-driven division runs

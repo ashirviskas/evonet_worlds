@@ -190,6 +190,30 @@ canvas { display: block; width: 100%; height: 100%; }
       <input type="range" id="light-speed" min="0" max="200" value="20" style="width:80px;">
       <span id="light-speed-val">0.00002</span>
     </div>
+    <div style="display:flex; align-items:center; gap:6px;">
+      <label>Photon energy:</label>
+      <input type="range" id="photon-energy" min="0" max="1000" value="261" style="width:80px;">
+      <span id="photon-energy-val">5.30</span>
+    </div>
+    <div style="display:flex; align-items:center; gap:6px;">
+      <label>Spawn rate:</label>
+      <input type="range" id="photon-spawn" min="0" max="20" step="1" value="2" style="width:80px;">
+      <span id="photon-spawn-val">2</span>
+    </div>
+    <div style="display:flex; align-items:center; gap:6px;">
+      <label>Lifetime:</label>
+      <input type="range" id="photon-lifetime" min="0" max="1000" value="596" style="width:80px;">
+      <span id="photon-lifetime-val">3000</span>
+    </div>
+  </div>
+  <div style="font-size:11px; display:flex; flex-direction:column; gap:4px; border-top:1px solid #333; padding-top:8px;">
+    <b>Spatial grid</b>
+    <div style="display:flex; align-items:center; gap:6px;">
+      <label title="Applies on Restart">Bucket size:</label>
+      <input type="range" id="grid-cell-size" min="12" max="400" step="4" value="24" style="width:80px;">
+      <span id="grid-cell-size-val">24</span>
+      <span style="color:#888; font-size:10px;">(restart)</span>
+    </div>
   </div>
   <div style="font-size:11px; display:flex; flex-direction:column; gap:4px; border-top:1px solid #333; padding-top:8px;">
     <b>Energy economy</b>
@@ -478,6 +502,15 @@ const CONFIG = {
   membraneRepairPerProtein: 10,      // HP restored per consumed Base Membrane (type 19)
   membraneRepairMinDeficit: 10,      // only heal when HP deficit >= this (avoids wasting proteins on tiny damage)
 
+  // --- Cell size / membrane growth ---
+  spawnRadius: 10.0,                 // every new cell starts at this radius (no randomness)
+  minRadius: 1.0,                    // hard lower bound for radius (Shrinkage protein cannot push below)
+  maxRadius: 1000.0,                 // hard upper bound for radius (Growth protein cannot push above)
+  radiusGrowthStep: 0.25,            // radius increase per Growth protein consumed
+  radiusShrinkStep: 0.25,            // radius decrease per Shrinkage protein consumed
+  membraneRemodelRate: 0.01,         // per-protein per-tick consumption probability for Growth/Shrinkage
+  upkeepAreaExponent: 2.0,           // metabolismCost scales by (radius / spawnRadius)^this
+
   // --- Membrane-driven division ---
   membraneDivisionThreshold: 10,     // Base Membrane (type 19) count required in cytoplasm to arm division; exactly this many are consumed at split (the surplus carries over and splits with cytoplasm). Also requires ≥1 Divider Trigger (type 4); all Divider Triggers are consumed at split.
   legacyDivisionEnabled: false,      // if true, DIVIDE_MARKER opcode (0x02) works; if false, only membrane-driven division runs
@@ -551,6 +584,8 @@ const PROTEIN_INFO = [];
     { name: 'Cell Sensor', desc: 'Fires when another living cell is in the slot’s sector (special) or in range (membrane). +1 subslot coupling.', cat: 'sensing' },
     { name: 'Free-Protein Sensor', desc: 'Fires when a free protein is in the slot’s sector (special) or in range (membrane). +1 subslot coupling.', cat: 'sensing' },
     { name: 'Advanced Replication Starter', desc: 'Binds any chromosome and initiates an Advanced-mode duplication: scans for REPLICASE_START, copies until REPLICASE_END, honours REPLICASE_JUMP_BYTE/CHROMOSOME. Consumed on bind. Errors apply.', cat: 'reproduction' },
+    { name: 'Growth protein', desc: 'In cytoplasm: consumed at membraneRemodelRate per tick to grow the cell radius by radiusGrowthStep, up to maxRadius. Bigger cells pay quadratically more membrane upkeep.', cat: 'structure' },
+    { name: 'Shrinkage protein', desc: 'In cytoplasm: consumed at membraneRemodelRate per tick to shrink the cell radius by radiusShrinkStep, down to minRadius. Smaller cells pay less membrane upkeep.', cat: 'structure' },
   ];
   for (let i = 0; i < 64; i++) {
     const hue = (i * 360 / 64 + 15) % 360;
@@ -993,6 +1028,8 @@ function initWorld() {
   world.pos_x = new Float32Array(max); world.pos_y = new Float32Array(max);
   world.vel_x = new Float32Array(max); world.vel_y = new Float32Array(max);
   world.radius = new Float32Array(max); world.energy = new Float32Array(max);
+  world.cellUpkeep = new Float32Array(max);
+  world.maxRadius = CONFIG.spawnRadius;
   world.membraneHP = new Float32Array(max);
   world.age = new Uint32Array(max); world.parentId = new Int32Array(max).fill(-1);
   world.generation = new Uint32Array(max);
@@ -1124,7 +1161,7 @@ function initWorld() {
   }
 }
 
-function spawnCell(x, y, parentId, generation) {
+function spawnCell(x, y, parentId, generation, radiusOverride) {
   let idx = -1;
   for (let i = 0; i < world.maxCells; i++) { if (!world.alive[i]) { idx = i; break; } }
   if (idx === -1) return -1;
@@ -1132,7 +1169,10 @@ function spawnCell(x, y, parentId, generation) {
   world.alive[idx] = 1;
   world.pos_x[idx] = x; world.pos_y[idx] = y;
   world.vel_x[idx] = 0; world.vel_y[idx] = 0;
-  world.radius[idx] = 8 + world.rng.next() * 4;
+  const r = (radiusOverride !== undefined) ? radiusOverride : CONFIG.spawnRadius;
+  world.radius[idx] = (r < CONFIG.minRadius) ? CONFIG.minRadius : (r > CONFIG.maxRadius ? CONFIG.maxRadius : r);
+  if (world.radius[idx] > world.maxRadius) world.maxRadius = world.radius[idx];
+  world.cellUpkeep[idx] = CONFIG.metabolismCost;
   world.energy[idx] = CONFIG.initialEnergy;
   world.membraneHP[idx] = CONFIG.membraneMaxHP;
   world.age[idx] = 0; world.parentId[idx] = parentId; world.generation[idx] = generation;
@@ -1222,10 +1262,21 @@ function rebuildGrid() {
 }
 
 function getNeighborCells(cellIdx) {
-  const gx = Math.floor(world.pos_x[cellIdx] / world.gridCellSize);
-  const gy = Math.floor(world.pos_y[cellIdx] / world.gridCellSize);
+  const gcs = world.gridCellSize;
+  const gx = (world.pos_x[cellIdx] / gcs) | 0;
+  const gy = (world.pos_y[cellIdx] / gcs) | 0;
+  // Span = ceil((self + maxObservedRadius)/gcs). Fast path: when both fit in
+  // half a bucket, the legacy 3x3 covers everything.
+  const radSelf = world.radius[cellIdx];
+  const maxR = world.maxRadius;
+  const halfGcs = gcs * 0.5;
+  let span = 1;
+  if (radSelf > halfGcs || maxR > halfGcs) {
+    span = Math.ceil((radSelf + maxR) / gcs);
+    if (span < 1) span = 1;
+  }
   const neighbors = [];
-  for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+  for (let dy = -span; dy <= span; dy++) for (let dx = -span; dx <= span; dx++) {
     const nx = gx + dx, ny = gy + dy;
     if (nx < 0 || nx >= world.gridW || ny < 0 || ny >= world.gridH) continue;
     const bucket = world.grid[ny * world.gridW + nx];
@@ -1515,8 +1566,24 @@ function tick() {
       replicationStarterTick(i);
       membraneDivisionCheck(i);
       degradeDNA(i);
-      world.energy[i] -= CONFIG.metabolismCost;
+      // Membrane upkeep: scales with cell area, baseline cost at spawnRadius.
+      const upkeep = CONFIG.metabolismCost * Math.pow(world.radius[i] / CONFIG.spawnRadius, CONFIG.upkeepAreaExponent);
+      world.cellUpkeep[i] = upkeep;
+      world.energy[i] -= upkeep;
       cellEnergyStorageTick(i);
+
+      // Membrane remodeling: Growth (43) / Shrinkage (44) consumed probabilistically.
+      const gCnt = world.internalProteins[i * 64 + 43];
+      if (gCnt > 0 && world.radius[i] < CONFIG.maxRadius && world.rng.next() < CONFIG.membraneRemodelRate * gCnt) {
+        cytoDec(i, 43);
+        world.radius[i] = Math.min(CONFIG.maxRadius, world.radius[i] + CONFIG.radiusGrowthStep);
+        if (world.radius[i] > world.maxRadius) world.maxRadius = world.radius[i];
+      }
+      const sCnt = world.internalProteins[i * 64 + 44];
+      if (sCnt > 0 && world.radius[i] > CONFIG.minRadius && world.rng.next() < CONFIG.membraneRemodelRate * sCnt) {
+        cytoDec(i, 44);
+        world.radius[i] = Math.max(CONFIG.minRadius, world.radius[i] - CONFIG.radiusShrinkStep);
+      }
 
       if (world.dividing[i]) {
         world.dividing[i]++;
@@ -1824,8 +1891,10 @@ function proteinNearScan() {
     const flagsBase = i * NUM_SLOTS;
     let gx = (xi / gcs) | 0; if (gx < 0) gx = 0; else if (gx >= gw) gx = gw - 1;
     let gy = (yi / gcs) | 0; if (gy < 0) gy = 0; else if (gy >= gh) gy = gh - 1;
-    const gxMin = gx > 0 ? gx - 1 : 0, gxMax = gx < gw - 1 ? gx + 1 : gx;
-    const gyMin = gy > 0 ? gy - 1 : 0, gyMax = gy < gh - 1 ? gy + 1 : gy;
+    let span = 1;
+    if (reach > gcs * 0.5) { span = Math.ceil(reach / gcs); if (span < 1) span = 1; }
+    const gxMin = gx - span < 0 ? 0 : gx - span, gxMax = gx + span >= gw ? gw - 1 : gx + span;
+    const gyMin = gy - span < 0 ? 0 : gy - span, gyMax = gy + span >= gh ? gh - 1 : gy + span;
     for (let gy2 = gyMin; gy2 <= gyMax; gy2++) {
       for (let gx2 = gxMin; gx2 <= gxMax; gx2++) {
         const bucket = world.freePGrid[gy2 * gw + gx2];
@@ -2059,8 +2128,10 @@ function photonTick() {
 
     let hit = false;
     let absorbed = false;
-    const gxMin = gx > 0 ? gx - 1 : 0, gxMax = gx < gw - 1 ? gx + 1 : gx;
-    const gyMin = gy > 0 ? gy - 1 : 0, gyMax = gy < gh - 1 ? gy + 1 : gy;
+    let pSpan = 1;
+    if (world.maxRadius > gcs * 0.5) { pSpan = Math.ceil(world.maxRadius / gcs); if (pSpan < 1) pSpan = 1; }
+    const gxMin = gx - pSpan < 0 ? 0 : gx - pSpan, gxMax = gx + pSpan >= gw ? gw - 1 : gx + pSpan;
+    const gyMin = gy - pSpan < 0 ? 0 : gy - pSpan, gyMax = gy + pSpan >= gh ? gh - 1 : gy + pSpan;
 
     for (let gy2 = gyMin; gy2 <= gyMax && !hit; gy2++) {
       for (let gx2 = gxMin; gx2 <= gxMax && !hit; gx2++) {
@@ -2530,7 +2601,8 @@ function divideCell(parentIdx) {
   const childIdx = spawnCell(
     world.pos_x[parentIdx] + Math.cos(angle) * dist,
     world.pos_y[parentIdx] + Math.sin(angle) * dist,
-    parentIdx, world.generation[parentIdx] + 1);
+    parentIdx, world.generation[parentIdx] + 1,
+    world.radius[parentIdx]);
   if (childIdx === -1) return -1;
 
   // Follow any in-flight replicase jobs to whichever cell now owns their
@@ -3532,7 +3604,9 @@ function pumpTick(cellIdx) {
         const gx = Math.floor(scanX / world.gridCellSize);
         const gy = Math.floor(scanY / world.gridCellSize);
         let found = -1, bestDist = CONFIG.intakeRadius * CONFIG.intakeRadius;
-        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        let pumpSpan = Math.ceil(CONFIG.intakeRadius / world.gridCellSize);
+        if (pumpSpan < 1) pumpSpan = 1;
+        for (let dy = -pumpSpan; dy <= pumpSpan; dy++) for (let dx = -pumpSpan; dx <= pumpSpan; dx++) {
           const nx = gx + dx, ny = gy + dy;
           if (nx < 0 || nx >= world.gridW || ny < 0 || ny >= world.gridH) continue;
           const bucket = world.freePGrid[ny * world.gridW + nx];
@@ -3587,8 +3661,10 @@ function chromAbsorbAll() {
     const fc = world.freeChromosomes[i];
     const gx = Math.floor(fc.x / gcs), gy = Math.floor(fc.y / gcs);
     let absorbed = false;
-    const gxMin = Math.max(0, gx - 1), gxMax = Math.min(gw - 1, gx + 1);
-    const gyMin = Math.max(0, gy - 1), gyMax = Math.min(gh - 1, gy + 1);
+    let cSpan = 1;
+    if (world.maxRadius > gcs * 0.5) { cSpan = Math.ceil(world.maxRadius / gcs); if (cSpan < 1) cSpan = 1; }
+    const gxMin = Math.max(0, gx - cSpan), gxMax = Math.min(gw - 1, gx + cSpan);
+    const gyMin = Math.max(0, gy - cSpan), gyMax = Math.min(gh - 1, gy + cSpan);
     for (let gy2 = gyMin; gy2 <= gyMax && !absorbed; gy2++) {
       for (let gx2 = gxMin; gx2 <= gxMax && !absorbed; gx2++) {
         const bucket = world.grid[gy2 * gw + gx2];
@@ -4262,7 +4338,8 @@ function membraneDivide(cellIdx) {
   const childIdx = spawnCell(
     world.pos_x[cellIdx] + Math.cos(angle) * dist,
     world.pos_y[cellIdx] + Math.sin(angle) * dist,
-    cellIdx, world.generation[cellIdx] + 1
+    cellIdx, world.generation[cellIdx] + 1,
+    world.radius[cellIdx]
   );
   if (childIdx === -1) { world.membraneDividing[cellIdx] = 0; return; }
 
@@ -5824,6 +5901,8 @@ function updateInspectPopup(rec) {
   }
   h += `Membrane HP: ${world.membraneHP[i].toFixed(1)} / ${CONFIG.membraneMaxHP}<br>`;
   h += `Age: ${world.age[i]}<br>`;
+  h += `Radius: ${world.radius[i].toFixed(2)} (${CONFIG.minRadius}–${CONFIG.maxRadius})<br>`;
+  h += `Membrane upkeep: ${(world.cellUpkeep ? world.cellUpkeep[i] : CONFIG.metabolismCost).toFixed(4)}/tick<br>`;
   const dr = getCellDegradationRate(i);
   h += `DNA deg: ${dr > 0 ? dr.toFixed(6) : 'none'}<br>`;
   h += `Parent: ${world.parentId[i]} | Vel: (${world.vel_x[i].toFixed(2)}, ${world.vel_y[i].toFixed(2)})<br>`;
@@ -5967,7 +6046,7 @@ function _decTA(e) {
 // in this list is either a scalar (handled below) or rebuildable (grids).
 const WORLD_TA_FIELDS = [
   'alive', 'pos_x', 'pos_y', 'vel_x', 'vel_y',
-  'radius', 'energy', 'membraneHP', 'age', 'parentId', 'generation',
+  'radius', 'cellUpkeep', 'energy', 'membraneHP', 'age', 'parentId', 'generation',
   'subslotType', 'subslotCount', 'slotOpen', 'internalProteins',
   'cytoOccMask', 'subslotOccMask', 'slotTypeCount',
   'decayNextCyto', 'decayNextSub',
@@ -5993,7 +6072,7 @@ const WORLD_SCALAR_FIELDS = [
   'freePCount', 'freePLiveCount',
   'replicase_nextSlot',
   'lightSourceAngle',
-  'gridCellSize', 'gridW', 'gridH',
+  'gridCellSize', 'gridW', 'gridH', 'maxRadius',
   'energyFieldW', 'energyFieldH',
 ];
 
@@ -6390,6 +6469,24 @@ document.getElementById('light-speed').addEventListener('input', (e) => {
   CONFIG.lightSourceSpeed = parseInt(e.target.value) / 1000000;
   document.getElementById('light-speed-val').textContent = CONFIG.lightSourceSpeed.toFixed(6);
 });
+document.getElementById('photon-energy').addEventListener('input', (e) => {
+  // Linear 0..1000 → 0.1..20. Slider 261 ≈ 5.30 (default).
+  CONFIG.photonEnergyValue = 0.1 + (parseInt(e.target.value) / 1000) * 19.9;
+  document.getElementById('photon-energy-val').textContent = CONFIG.photonEnergyValue.toFixed(2);
+});
+document.getElementById('photon-spawn').addEventListener('input', (e) => {
+  CONFIG.photonSpawnRate = parseInt(e.target.value);
+  document.getElementById('photon-spawn-val').textContent = CONFIG.photonSpawnRate;
+});
+document.getElementById('photon-lifetime').addEventListener('input', (e) => {
+  // Log-mapped 0..1000 → 100..30000 (300x). Slider 596 ≈ 3000 (default).
+  CONFIG.photonLifetime = Math.round(100 * Math.pow(300, parseInt(e.target.value) / 1000));
+  document.getElementById('photon-lifetime-val').textContent = CONFIG.photonLifetime;
+});
+document.getElementById('grid-cell-size').addEventListener('input', (e) => {
+  // Restart-only — value is read by btn-restart. Just update the readout.
+  document.getElementById('grid-cell-size-val').textContent = parseInt(e.target.value);
+});
 document.getElementById('deg-start-age').addEventListener('input', (e) => { CONFIG.degradationStartAge = parseInt(e.target.value); document.getElementById('deg-start-age-val').textContent = (CONFIG.degradationStartAge / 1000) + 'k'; });
 document.getElementById('deg-start-rate').addEventListener('input', (e) => { CONFIG.degradationStartRate = parseInt(e.target.value) / 1000000; document.getElementById('deg-start-rate-val').textContent = CONFIG.degradationStartRate.toFixed(4); });
 document.getElementById('deg-increase').addEventListener('input', (e) => { CONFIG.degradationIncreasePerEra = parseInt(e.target.value) / 100; document.getElementById('deg-increase-val').textContent = (CONFIG.degradationIncreasePerEra * 100).toFixed(0) + '%'; });
@@ -6465,6 +6562,21 @@ document.getElementById('btn-restart').addEventListener('click', () => {
   world.rng = makeRNG(CONFIG.seed); world.tick = 0; world.numCells = 0;
   closeAllInspectPopups();
   lineageReset();
+  // Apply pending grid bucket size — rebuilds grid arrays only if changed.
+  const newGcs = parseInt(document.getElementById('grid-cell-size').value) || 24;
+  if (newGcs !== world.gridCellSize) {
+    CONFIG.gridCellSize = newGcs;
+    world.gridCellSize = newGcs;
+    world.gridW = Math.ceil(CONFIG.worldWidth / newGcs);
+    world.gridH = Math.ceil(CONFIG.worldHeight / newGcs);
+    world.grid = new Array(world.gridW * world.gridH);
+    for (let k = 0; k < world.grid.length; k++) world.grid[k] = [];
+    world.freePGrid = new Array(world.gridW * world.gridH);
+    for (let k = 0; k < world.freePGrid.length; k++) world.freePGrid[k] = [];
+    world.cellGridIdx.fill(-1);
+    world.freePGridIdx.fill(-1);
+  }
+  world.maxRadius = CONFIG.spawnRadius;
   for (let i = 0; i < world.maxCells; i++) { world.alive[i] = 0; world.genomes[i] = null; world.cellGridIdx[i] = -1; }
   for (let i = 0; i < world.grid.length; i++) world.grid[i].length = 0;
   world.subslotType.fill(255); world.subslotCount.fill(0); world.slotOpen.fill(1); world.internalProteins.fill(0);

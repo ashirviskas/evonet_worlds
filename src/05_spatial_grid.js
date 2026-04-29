@@ -51,10 +51,21 @@ function rebuildGrid() {
 }
 
 function getNeighborCells(cellIdx) {
-  const gx = Math.floor(world.pos_x[cellIdx] / world.gridCellSize);
-  const gy = Math.floor(world.pos_y[cellIdx] / world.gridCellSize);
+  const gcs = world.gridCellSize;
+  const gx = (world.pos_x[cellIdx] / gcs) | 0;
+  const gy = (world.pos_y[cellIdx] / gcs) | 0;
+  // Span = ceil((self + maxObservedRadius)/gcs). Fast path: when both fit in
+  // half a bucket, the legacy 3x3 covers everything.
+  const radSelf = world.radius[cellIdx];
+  const maxR = world.maxRadius;
+  const halfGcs = gcs * 0.5;
+  let span = 1;
+  if (radSelf > halfGcs || maxR > halfGcs) {
+    span = Math.ceil((radSelf + maxR) / gcs);
+    if (span < 1) span = 1;
+  }
   const neighbors = [];
-  for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+  for (let dy = -span; dy <= span; dy++) for (let dx = -span; dx <= span; dx++) {
     const nx = gx + dx, ny = gy + dy;
     if (nx < 0 || nx >= world.gridW || ny < 0 || ny >= world.gridH) continue;
     const bucket = world.grid[ny * world.gridW + nx];

@@ -33,8 +33,24 @@ function tick() {
       replicationStarterTick(i);
       membraneDivisionCheck(i);
       degradeDNA(i);
-      world.energy[i] -= CONFIG.metabolismCost;
+      // Membrane upkeep: scales with cell area, baseline cost at spawnRadius.
+      const upkeep = CONFIG.metabolismCost * Math.pow(world.radius[i] / CONFIG.spawnRadius, CONFIG.upkeepAreaExponent);
+      world.cellUpkeep[i] = upkeep;
+      world.energy[i] -= upkeep;
       cellEnergyStorageTick(i);
+
+      // Membrane remodeling: Growth (43) / Shrinkage (44) consumed probabilistically.
+      const gCnt = world.internalProteins[i * 64 + 43];
+      if (gCnt > 0 && world.radius[i] < CONFIG.maxRadius && world.rng.next() < CONFIG.membraneRemodelRate * gCnt) {
+        cytoDec(i, 43);
+        world.radius[i] = Math.min(CONFIG.maxRadius, world.radius[i] + CONFIG.radiusGrowthStep);
+        if (world.radius[i] > world.maxRadius) world.maxRadius = world.radius[i];
+      }
+      const sCnt = world.internalProteins[i * 64 + 44];
+      if (sCnt > 0 && world.radius[i] > CONFIG.minRadius && world.rng.next() < CONFIG.membraneRemodelRate * sCnt) {
+        cytoDec(i, 44);
+        world.radius[i] = Math.max(CONFIG.minRadius, world.radius[i] - CONFIG.radiusShrinkStep);
+      }
 
       if (world.dividing[i]) {
         world.dividing[i]++;

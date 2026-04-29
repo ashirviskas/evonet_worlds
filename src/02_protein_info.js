@@ -49,6 +49,8 @@ const PROTEIN_INFO = [];
     { name: 'Cell Sensor', desc: 'Fires when another living cell is in the slot’s sector (special) or in range (membrane). +1 subslot coupling.', cat: 'sensing' },
     { name: 'Free-Protein Sensor', desc: 'Fires when a free protein is in the slot’s sector (special) or in range (membrane). +1 subslot coupling.', cat: 'sensing' },
     { name: 'Advanced Replication Starter', desc: 'Binds any chromosome and initiates an Advanced-mode duplication: scans for REPLICASE_START, copies until REPLICASE_END, honours REPLICASE_JUMP_BYTE/CHROMOSOME. Consumed on bind. Errors apply.', cat: 'reproduction' },
+    { name: 'Growth protein', desc: 'In cytoplasm: consumed at membraneRemodelRate per tick to grow the cell radius by radiusGrowthStep, up to maxRadius. Bigger cells pay quadratically more membrane upkeep.', cat: 'structure' },
+    { name: 'Shrinkage protein', desc: 'In cytoplasm: consumed at membraneRemodelRate per tick to shrink the cell radius by radiusShrinkStep, down to minRadius. Smaller cells pay less membrane upkeep.', cat: 'structure' },
   ];
   for (let i = 0; i < 64; i++) {
     const hue = (i * 360 / 64 + 15) % 360;

@@ -44,7 +44,9 @@ function pumpTick(cellIdx) {
         const gx = Math.floor(scanX / world.gridCellSize);
         const gy = Math.floor(scanY / world.gridCellSize);
         let found = -1, bestDist = CONFIG.intakeRadius * CONFIG.intakeRadius;
-        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        let pumpSpan = Math.ceil(CONFIG.intakeRadius / world.gridCellSize);
+        if (pumpSpan < 1) pumpSpan = 1;
+        for (let dy = -pumpSpan; dy <= pumpSpan; dy++) for (let dx = -pumpSpan; dx <= pumpSpan; dx++) {
           const nx = gx + dx, ny = gy + dy;
           if (nx < 0 || nx >= world.gridW || ny < 0 || ny >= world.gridH) continue;
           const bucket = world.freePGrid[ny * world.gridW + nx];
