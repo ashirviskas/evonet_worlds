@@ -3,7 +3,7 @@
 // ============================================================
 // CONTROLS
 // ============================================================
-let running = true, ticksPerFrame = 10, renderEnabled = true;
+let running = true, ticksPerFrame = 10, renderEnabled = true, lineageRenderEnabled = true;
 
 document.getElementById('btn-play').addEventListener('click', () => { running = true; document.getElementById('btn-play').classList.add('active'); document.getElementById('btn-pause').classList.remove('active'); });
 document.getElementById('btn-pause').addEventListener('click', () => { running = false; document.getElementById('btn-pause').classList.add('active'); document.getElementById('btn-play').classList.remove('active'); });
@@ -31,6 +31,45 @@ window.addEventListener('keydown', (e) => {
 document.getElementById('speed').addEventListener('input', (e) => { ticksPerFrame = parseInt(e.target.value); document.getElementById('speed-val').textContent = ticksPerFrame; });
 document.getElementById('initial-cells').addEventListener('input', (e) => { CONFIG.initialCells = parseInt(e.target.value); document.getElementById('initial-cells-val').textContent = CONFIG.initialCells; });
 document.getElementById('render-toggle').addEventListener('change', (e) => { renderEnabled = e.target.checked; if (renderEnabled) render(); });
+
+// Lineage panel show/hide. Hides the panel + its resizer; gates renderLineage()
+// inside the main render loop so we don't spend cycles drawing into a hidden
+// canvas.
+document.getElementById('render-lineage-toggle').addEventListener('change', (e) => {
+  lineageRenderEnabled = e.target.checked;
+  const panel = document.getElementById('lineage-panel');
+  const resizer = document.getElementById('resizer-left');
+  if (panel) panel.style.display = lineageRenderEnabled ? '' : 'none';
+  if (resizer) resizer.style.display = lineageRenderEnabled ? '' : 'none';
+  if (lineageRenderEnabled) { resizeLineageCanvas(); renderLineage(); }
+});
+
+// Settings-panel collapse. Width is forced to 28px via the .collapsed class
+// (see poc.template.html), and the right resizer is hidden so the only path
+// back is the toggle button itself.
+(function wirePanelCollapse() {
+  const btn = document.getElementById('panel-collapse-btn');
+  if (!btn) return;
+  let savedWidth = null;
+  btn.addEventListener('click', () => {
+    const panel = document.getElementById('panel');
+    const resizer = document.getElementById('resizer-right');
+    if (panel.classList.contains('collapsed')) {
+      panel.classList.remove('collapsed');
+      if (savedWidth) panel.style.width = savedWidth;
+      if (resizer) resizer.style.display = '';
+      btn.textContent = '◀';
+      btn.title = 'Hide settings panel';
+    } else {
+      savedWidth = panel.style.width || getComputedStyle(panel).width;
+      panel.classList.add('collapsed');
+      if (resizer) resizer.style.display = 'none';
+      btn.textContent = '▶';
+      btn.title = 'Show settings panel';
+    }
+    resizeCanvas();
+  });
+})();
 document.getElementById('mutation-rate').addEventListener('input', (e) => {
   // Log-mapped 0..1000 → 0.00001..0.1 (10000x range). Slider 250 ≈ 0.0001 baseline.
   CONFIG.mutationRate = 0.00001 * Math.pow(10000, parseInt(e.target.value) / 1000);

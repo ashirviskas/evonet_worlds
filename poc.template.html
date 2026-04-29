@@ -76,6 +76,16 @@ canvas { display: block; width: 100%; height: 100%; }
 #protein-legend { position: fixed; bottom: 0; left: 320px; right: 340px; max-height: 40vh; background: rgba(20,20,20,0.95); border-top: 1px solid #333; display: flex; flex-wrap: wrap; align-items: center; padding: 2px 8px; gap: 2px; overflow-y: auto; z-index: 10; }
 .legend-swatch { width: 18px; height: 18px; border-radius: 3px; display: flex; align-items: center; justify-content: center; font-size: 8px; cursor: default; flex-shrink: 0; border: 1px solid rgba(255,255,255,0.15); }
 #milestones { position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.6); padding: 10px 14px; border-radius: 6px; font-size: 11px; line-height: 1.6; z-index: 5; pointer-events: none; min-width: 260px; }
+#milestones.collapsed { min-width: 0; padding: 4px 8px; }
+#milestones-toggle { background: rgba(80,80,80,0.5); color: #ddd; border: 1px solid #555; cursor: pointer; padding: 0 6px; border-radius: 3px; font-family: monospace; pointer-events: auto; font-size: 11px; line-height: 16px; }
+#milestones-toggle:hover { background: rgba(100,100,100,0.7); }
+/* Settings panel collapse */
+#panel.collapsed { width: 28px !important; padding: 4px 0; overflow: hidden; }
+#panel.collapsed > *:not(#panel-toggle-bar) { display: none !important; }
+#panel-toggle-bar { display: flex; justify-content: flex-end; flex-shrink: 0; }
+#panel.collapsed #panel-toggle-bar { justify-content: center; }
+#panel-collapse-btn { background: #2a2a2a; color: #ddd; border: 1px solid #444; cursor: pointer; padding: 2px 6px; border-radius: 3px; font-family: monospace; font-size: 11px; }
+#panel-collapse-btn:hover { background: #3a3a3a; border-color: #666; }
 .stats-chart-block { display: flex; flex-direction: column; gap: 2px; }
 .stats-chart-title { font-size: 10px; color: #8cf; font-family: monospace; }
 .stats-chart { background: #0a0a0a; border: 1px solid #333; border-radius: 3px; width: 100%; height: auto; display: block; }
@@ -105,6 +115,9 @@ canvas { display: block; width: 100%; height: 100%; }
 </div>
 <div class="resizer" id="resizer-right" data-target="panel" data-dir="left"></div>
 <div id="panel">
+  <div id="panel-toggle-bar">
+    <button id="panel-collapse-btn" title="Hide settings panel">◀</button>
+  </div>
   <div id="controls">
     <button id="btn-play" class="active">Play</button>
     <button id="btn-pause">Pause</button>
@@ -130,6 +143,9 @@ canvas { display: block; width: 100%; height: 100%; }
     </div>
     <label style="display:flex; align-items:center; gap:4px; font-size:11px;">
       <input type="checkbox" id="render-toggle" checked> Render
+    </label>
+    <label style="display:flex; align-items:center; gap:4px; font-size:11px;" title="Show/hide the lineage panel on the left">
+      <input type="checkbox" id="render-lineage-toggle" checked> Lineage
     </label>
   </div>
   <div id="world-identity" style="display:flex; align-items:center; gap:6px; font-size:11px; padding:4px 6px; background:#222; border-radius:3px;">

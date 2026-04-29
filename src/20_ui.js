@@ -11,6 +11,7 @@ function updateStats() {
   el.innerHTML = `Tick: ${world.tick} | TPS: ${tpsStr}<br>Cells: ${n}<br>Total Energy: ${totalE.toFixed(1)}<br>Avg Energy: ${n ? (totalE / n).toFixed(1) : 0}<br>Photons: ${world.photonCount}<br>Free proteins: ${world.freePCount}<br>Free chroms: ${world.freeChromosomes.length}<br>Replicase: ${world.milestones.replicaseCompleted}ok/${world.milestones.replicaseFailed}fail<br>Memb divs: ${world.milestones.membraneDivisions} | Absorb: ${world.milestones.chromAbsorptions}`;
 }
 
+let milestonesCollapsed = false;
 function updateMilestones() {
   const el = document.getElementById('milestones');
   const m = world.milestones;
@@ -28,12 +29,25 @@ function updateMilestones() {
     { done: m.chromAbsorptions > 0, label: 'Chrom absorbed', count: m.chromAbsorptions },
     { done: m.chromEjections > 0, label: 'Chrom ejected', count: m.chromEjections },
   ];
-  let h = '<b style="color:#8af">Milestones</b><br>';
-  for (const it of items) {
-    h += `${it.done ? '<span class="ms-check">[v]</span>' : '<span class="ms-uncheck">[ ]</span>'} ${it.label} <span class="ms-count">(${it.count})</span><br>`;
+  el.classList.toggle('collapsed', milestonesCollapsed);
+  let h = `<div style="display:flex; align-items:center; gap:8px;"><b style="color:#8af">Milestones</b><button id="milestones-toggle" title="${milestonesCollapsed ? 'Expand' : 'Collapse'} milestones">${milestonesCollapsed ? '+' : '−'}</button></div>`;
+  if (!milestonesCollapsed) {
+    for (const it of items) {
+      h += `${it.done ? '<span class="ms-check">[v]</span>' : '<span class="ms-uncheck">[ ]</span>'} ${it.label} <span class="ms-count">(${it.count})</span><br>`;
+    }
   }
   el.innerHTML = h;
 }
+
+// One-time delegated click handler for the milestones toggle button. The
+// updateMilestones function rebuilds innerHTML every tick, so a per-element
+// listener would leak; delegating off #milestones survives the rebuilds.
+document.getElementById('milestones').addEventListener('click', (e) => {
+  if (e.target && e.target.id === 'milestones-toggle') {
+    milestonesCollapsed = !milestonesCollapsed;
+    updateMilestones();
+  }
+});
 
 function esc(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;'); }
 function proteinTip(info) { return `<span class='tip-title'>${esc(info.name)}</span>\n<span class='tip-desc'>${esc(info.desc)}</span>`; }

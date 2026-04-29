@@ -142,6 +142,7 @@ function mainLoop() {
       tpsWindowStart = nowT;
     }
     if (renderEnabled) render();
+    if (lineageRenderEnabled && typeof renderLineage === 'function') renderLineage();
     updateStats(); updateInspect();
     if (++frameCounter % 10 === 0) {
       updateMilestones();

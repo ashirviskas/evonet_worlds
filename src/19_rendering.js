@@ -513,5 +513,4 @@ function render() {
     }
   }
 
-  if (typeof renderLineage === 'function') renderLineage();
 }
