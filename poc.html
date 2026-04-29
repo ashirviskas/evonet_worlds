@@ -2601,8 +2601,7 @@ function divideCell(parentIdx) {
   const childIdx = spawnCell(
     world.pos_x[parentIdx] + Math.cos(angle) * dist,
     world.pos_y[parentIdx] + Math.sin(angle) * dist,
-    parentIdx, world.generation[parentIdx] + 1,
-    world.radius[parentIdx]);
+    parentIdx, world.generation[parentIdx] + 1);
   if (childIdx === -1) return -1;
 
   // Follow any in-flight replicase jobs to whichever cell now owns their
@@ -4338,8 +4337,7 @@ function membraneDivide(cellIdx) {
   const childIdx = spawnCell(
     world.pos_x[cellIdx] + Math.cos(angle) * dist,
     world.pos_y[cellIdx] + Math.sin(angle) * dist,
-    cellIdx, world.generation[cellIdx] + 1,
-    world.radius[cellIdx]
+    cellIdx, world.generation[cellIdx] + 1
   );
   if (childIdx === -1) { world.membraneDividing[cellIdx] = 0; return; }
 
