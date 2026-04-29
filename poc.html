@@ -421,7 +421,7 @@ canvas { display: block; width: 100%; height: 100%; }
 </div>
 
 <script>
-const BUILD_INFO = Object.freeze({ commit: "70faaa3-dirty", builtAt: "2026-04-29T16:46:57+00:00" });
+const BUILD_INFO = Object.freeze({ commit: "5f4974d-dirty", builtAt: "2026-04-29T16:51:59+00:00" });
 </script>
 <script>
 // ===== 00_tooltip.js =====
@@ -8416,22 +8416,56 @@ function _fallbackUuid() {
   return `${r()}-${r()}-${r()}-${r()}`;
 }
 
-// Free 4-neighbor cells around the union of known worlds. Returns sorted
-// list of {mx, my} strings (we use string keys for set semantics).
+// Free 4-neighbor cells around the union of known worlds. Returns a list of
+// {mx, my, neighbours, bbMax, bbArea} entries, ordered so cands[0] is the
+// preferred slot:
+//   1. most occupied 4-neighbours (fills concave corners first)
+//   2. smallest max(bbWidth, bbHeight) of the cluster after placement (keeps
+//      the cluster as close to square as possible)
+//   3. smallest bbWidth*bbHeight (secondary compactness signal)
+//   4. lex-smallest (mx, my) — deterministic final tie-break
+// This makes a fresh multiverse grow as 1 → 2 → L → 2×2 → 3×2 → 3×3 → …
+// instead of stretching into a line.
 function _freeAdjacencyCandidates() {
+  if (world.knownWorlds.size === 0) return [];
+
   const occupied = new Set();
-  for (const [, w] of world.knownWorlds) occupied.add(`${w.mx},${w.my}`);
-  const candidates = new Set();
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const [, w] of world.knownWorlds) {
+    occupied.add(`${w.mx},${w.my}`);
+    if (w.mx < minX) minX = w.mx;
+    if (w.mx > maxX) maxX = w.mx;
+    if (w.my < minY) minY = w.my;
+    if (w.my > maxY) maxY = w.my;
+  }
+
+  const cands = new Map();   // key -> {mx, my, neighbours}
   for (const [, w] of world.knownWorlds) {
     for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-      const k = `${w.mx + dx},${w.my + dy}`;
-      if (!occupied.has(k)) candidates.add(k);
+      const cx = w.mx + dx, cy = w.my + dy;
+      const k = `${cx},${cy}`;
+      if (occupied.has(k)) continue;
+      const cur = cands.get(k);
+      if (cur) cur.neighbours++;
+      else cands.set(k, { mx: cx, my: cy, neighbours: 1 });
     }
   }
-  return [...candidates].map(k => {
-    const [mx, my] = k.split(',').map(Number);
-    return { mx, my };
-  }).sort((a, b) => a.mx - b.mx || a.my - b.my);
+
+  const out = [];
+  for (const c of cands.values()) {
+    const bw = Math.max(maxX, c.mx) - Math.min(minX, c.mx) + 1;
+    const bh = Math.max(maxY, c.my) - Math.min(minY, c.my) + 1;
+    c.bbMax = Math.max(bw, bh);
+    c.bbArea = bw * bh;
+    out.push(c);
+  }
+  out.sort((a, b) =>
+    (b.neighbours - a.neighbours) ||
+    (a.bbMax - b.bbMax) ||
+    (a.bbArea - b.bbArea) ||
+    (a.mx - b.mx) || (a.my - b.my)
+  );
+  return out;
 }
 
 // Given knownWorlds + our (mx, my), populate world.neighbors[side] with the
